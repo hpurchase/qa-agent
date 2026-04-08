@@ -11,6 +11,7 @@ export default function NewAuditPage() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!url.trim()) return;
     setError(null);
     setLoading(true);
     try {
@@ -31,35 +32,49 @@ export default function NewAuditPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-14">
-      <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Create a SaaS CRO audit
-        </h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          PLG-focused. We’ll capture desktop+mobile screenshots and generate CRO suggestions.
-        </p>
+    <div className="flex flex-1 items-center justify-center px-6">
+      <div className="w-full max-w-lg">
+        <div className="text-center">
+          <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            SaaS CRO Audit
+          </h1>
+          <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
+            Paste a landing page URL. We screenshot it, analyse the DOM and
+            visuals, and give you PLG-focused conversion recommendations.
+          </p>
+        </div>
 
-        <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-3">
-          <label className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            URL
-          </label>
-          <input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="e.g. https://seospace.co"
-            className="h-11 rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-900 outline-none ring-zinc-300 focus:ring-2 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50 dark:ring-zinc-700"
-          />
-          {error ? <p className="text-sm text-red-600">{error}</p> : null}
-          <button
-            disabled={loading}
-            className="mt-2 inline-flex h-11 items-center justify-center rounded-xl bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
-          >
-            {loading ? "Creating…" : "Run audit"}
-          </button>
+        <form onSubmit={onSubmit} className="mt-8">
+          <div className="flex items-center gap-2 rounded-2xl border border-zinc-200 bg-white p-1.5 shadow-sm focus-within:ring-2 focus-within:ring-zinc-300 dark:border-zinc-800 dark:bg-zinc-950 dark:focus-within:ring-zinc-700">
+            <input
+              type="url"
+              required
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://example.com"
+              className="h-10 flex-1 bg-transparent px-3 text-sm text-zinc-900 outline-none placeholder:text-zinc-400 dark:text-zinc-50 dark:placeholder:text-zinc-600"
+            />
+            <button
+              disabled={loading || !url.trim()}
+              className="h-10 shrink-0 rounded-xl bg-zinc-900 px-5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+            >
+              {loading ? "Analysing…" : "Audit"}
+            </button>
+          </div>
+
+          {error ? (
+            <p className="mt-3 text-center text-sm text-red-600 dark:text-red-400">{error}</p>
+          ) : null}
         </form>
+
+        <div className="mt-6 flex items-center justify-center gap-4 text-xs text-zinc-400 dark:text-zinc-600">
+          <span>Desktop + mobile screenshots</span>
+          <span aria-hidden="true">·</span>
+          <span>Pricing analysis</span>
+          <span aria-hidden="true">·</span>
+          <span>Claude vision</span>
+        </div>
       </div>
     </div>
   );
 }
-
