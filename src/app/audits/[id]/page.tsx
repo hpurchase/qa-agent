@@ -6,6 +6,7 @@ import {
   listAuditTargets,
   listArtifacts,
   listFindings,
+  listOnboardingSteps,
 } from "@/lib/db/readAudit";
 import { signAuditArtifactUrl } from "@/lib/storage";
 import type { CroFinding } from "@/lib/cro/heuristics";
@@ -71,10 +72,11 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
   const run = await getAuditRun(id);
   if (!run) return notFound();
 
-  const [targets, artifacts, findings] = await Promise.all([
+  const [targets, artifacts, findings, onboardingSteps] = await Promise.all([
     listAuditTargets(id),
     listArtifacts(id),
     listFindings(id),
+    listOnboardingSteps(id),
   ]);
   const bucket = env("AUDIT_ARTIFACTS_BUCKET", "audit-artifacts");
   const stage =
@@ -141,6 +143,38 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
   const medCount = allRecs.filter((r) => r.severity === "med").length;
   const lowCount = allRecs.filter((r) => r.severity === "low").length;
   const hasLlm = findings.some((f) => f.source === "llm");
+
+  // Onboarding data.
+  const onboardingStatus = (run as Record<string, unknown>).onboarding_status as string | undefined ?? "pending";
+  const onboardingSummary = (run as Record<string, unknown>).onboarding_summary as Record<string, unknown> | null;
+  const onboardingDone = onboardingStatus === "done" || onboardingStatus === "blocked";
+  const onboardingRunning = onboardingStatus === "running";
+  const onboardingFailed = onboardingStatus === "failed";
+
+  // Sign onboarding step screenshot URLs.
+  const onboardingScreenshots = new Map<number, string>();
+  for (const step of onboardingSteps) {
+    if (step.screenshot_path) {
+      try {
+        const url = await signAuditArtifactUrl({
+          bucket,
+          path: step.screenshot_path,
+          expiresInSeconds: 60 * 60,
+        });
+        onboardingScreenshots.set(step.step_idx, url);
+      } catch {
+        // Non-fatal.
+      }
+    }
+  }
+
+  const obStepCount = (onboardingSummary?.stepCount as number) ?? onboardingSteps.length;
+  const obDistinctScreens = (onboardingSummary?.distinctScreens as number) ?? 0;
+  const obTimeToValue = (onboardingSummary?.estimatedTimeToValueMs as number) ?? 0;
+  const obFriction = (onboardingSummary?.frictionFlags as string[]) ?? [];
+  const obFinalStatus = (onboardingSummary?.finalStatus as string) ?? onboardingStatus;
+  const obBlockedReason = (onboardingSummary?.blockedReason as string) ?? null;
+  const obRecommendations = (onboardingSummary?.recommendations as Array<Record<string, unknown>>) ?? [];
 
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
@@ -418,6 +452,228 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
                 </div>
               );
             })()}
+
+        {/* ─── Onboarding Flow Section ─── */}
+        {(onboardingDone || onboardingRunning || onboardingFailed || onboardingSteps.length > 0) && (
+          <div className="mt-10">
+            <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+              Onboarding Flow
+            </h2>
+
+            {/* Summary bar */}
+            <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+              {onboardingDone ? (
+                <div className={`h-2.5 w-2.5 rounded-full ${obFinalStatus === "blocked" ? "bg-amber-500" : "bg-emerald-500"}`} />
+              ) : onboardingFailed ? (
+                <div className="h-2.5 w-2.5 rounded-full bg-red-500" />
+              ) : (
+                <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-amber-500" />
+              )}
+              <span className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                {obFinalStatus === "done"
+                  ? "Signup completed"
+                  : obFinalStatus === "blocked"
+                    ? "Signup blocked"
+                    : onboardingFailed
+                      ? "Onboarding failed"
+                      : onboardingRunning
+                        ? "Signing up…"
+                        : "Pending"}
+              </span>
+              {obBlockedReason && (
+                <span className="text-xs text-amber-600 dark:text-amber-400">
+                  {obBlockedReason}
+                </span>
+              )}
+              <div className="ml-auto flex gap-4 text-xs text-zinc-500">
+                {obStepCount > 0 && (
+                  <span>{obStepCount} step{obStepCount !== 1 ? "s" : ""}</span>
+                )}
+                {obDistinctScreens > 0 && (
+                  <span>{obDistinctScreens} screen{obDistinctScreens !== 1 ? "s" : ""}</span>
+                )}
+                {obTimeToValue > 0 && (
+                  <span>~{Math.round(obTimeToValue / 1000)}s to value</span>
+                )}
+              </div>
+            </div>
+
+            {/* Friction flags */}
+            {obFriction.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {obFriction.map((flag, i) => (
+                  <span
+                    key={i}
+                    className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-200"
+                  >
+                    {flag}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Step timeline */}
+            {onboardingSteps.length > 0 && (
+              <div className="mt-6 space-y-3">
+                {onboardingSteps.map((step) => {
+                  const screenshotSrc = onboardingScreenshots.get(step.step_idx);
+                  const detail = (step.action_detail ?? {}) as Record<string, string | undefined>;
+                  const isBlocked = step.action_type === "blocked";
+                  const isDoneStep = step.action_type === "done";
+
+                  return (
+                    <details
+                      key={step.id}
+                      className={`group rounded-xl border ${
+                        isBlocked
+                          ? "border-red-200 bg-red-50/50 dark:border-red-900 dark:bg-red-950/30"
+                          : isDoneStep
+                            ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-900 dark:bg-emerald-950/30"
+                            : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
+                      }`}
+                    >
+                      <summary className="flex cursor-pointer items-center gap-3 px-4 py-3">
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[11px] font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                          {step.step_idx + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                            {step.action_type === "fill"
+                              ? `Fill: ${(detail.value as string)?.slice(0, 30) ?? "..."}`
+                              : step.action_type === "click"
+                                ? `Click: ${String(detail.reason ?? "button").slice(0, 50)}`
+                                : step.action_type === "select"
+                                  ? `Select: ${String(detail.value ?? "option").slice(0, 30)}`
+                                  : step.action_type === "check"
+                                    ? "Check checkbox"
+                                    : step.action_type === "email_verify"
+                                      ? "Email verification"
+                                      : step.action_type === "skip"
+                                        ? "Skip optional step"
+                                        : step.action_type === "done"
+                                          ? "Reached app / dashboard"
+                                          : step.action_type === "blocked"
+                                            ? `Blocked: ${step.blocked_reason ?? "unknown"}`
+                                            : step.action_type}
+                          </span>
+                          {step.url && (
+                            <span className="ml-2 truncate text-[11px] text-zinc-400">
+                              {step.url}
+                            </span>
+                          )}
+                        </div>
+                        <span className="shrink-0 text-[11px] text-zinc-400">
+                          {step.duration_ms > 0 ? `${(step.duration_ms / 1000).toFixed(1)}s` : ""}
+                        </span>
+                        <svg
+                          className="h-4 w-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </summary>
+                      <div className="border-t border-zinc-100 px-4 py-3 dark:border-zinc-800">
+                        {detail.reason && (
+                          <p className="mb-3 text-xs text-zinc-500">{String(detail.reason)}</p>
+                        )}
+                        {screenshotSrc && (
+                          <div className="max-h-[400px] overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={screenshotSrc}
+                              alt={`Step ${step.step_idx + 1}`}
+                              className="w-full"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Onboarding recommendations */}
+            {obRecommendations.length > 0 && (
+              <div className="mt-6 rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+                <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+                  <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
+                    Onboarding improvements
+                  </h3>
+                </div>
+                <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                  {obRecommendations.map((rec, idx) => {
+                    const title = String(rec.title ?? "Recommendation");
+                    const severity = String(rec.severity ?? "med");
+                    const recommendation = rec.recommendation ? String(rec.recommendation) : null;
+                    const whyItMatters = rec.whyItMatters ? String(rec.whyItMatters) : null;
+                    const howToTest = rec.howToTest ? String(rec.howToTest) : null;
+                    const stepRefs = Array.isArray(rec.step_refs) ? (rec.step_refs as number[]) : [];
+                    return (
+                    <details key={idx} className="group">
+                      <summary className="flex cursor-pointer items-start gap-3 px-5 py-4 hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
+                        <span
+                          className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${severityColor(severity)}`}
+                        >
+                          {severity}
+                        </span>
+                        <div className="flex-1">
+                          <div className="font-medium text-zinc-900 dark:text-zinc-50">
+                            {title}
+                          </div>
+                          {stepRefs.length > 0 && (
+                            <div className="mt-0.5 text-[11px] text-zinc-400">
+                              Steps: {stepRefs.map((s) => s + 1).join(", ")}
+                            </div>
+                          )}
+                        </div>
+                        <svg
+                          className="mt-1 h-4 w-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </summary>
+                      <div className="border-t border-zinc-100 bg-zinc-50/50 px-5 py-4 dark:border-zinc-800 dark:bg-zinc-900/30">
+                        {recommendation && (
+                          <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+                            {recommendation}
+                          </p>
+                        )}
+                        {whyItMatters && (
+                          <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                            <span className="font-medium text-zinc-700 dark:text-zinc-300">Why: </span>
+                            {whyItMatters}
+                          </p>
+                        )}
+                        {howToTest && (
+                          <p className="mt-3 rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                            How to test: {howToTest}
+                          </p>
+                        )}
+                      </div>
+                    </details>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Pending state */}
+            {onboardingRunning && onboardingSteps.length === 0 && (
+              <div className="mt-4 rounded-2xl border border-dashed border-zinc-200 p-8 text-center text-sm text-zinc-500 dark:border-zinc-800">
+                <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600" />
+                Signing up and mapping the onboarding flow…
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

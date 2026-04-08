@@ -3,6 +3,7 @@ import { claimNextAuditJob, updateAuditJob } from "@/lib/db/auditJobs";
 import { getAuditRun } from "@/lib/db/readAudit";
 import { updateAuditRun } from "@/lib/db/auditRuns";
 import { runMultiPageAudit } from "@/lib/audit/runAuditV3";
+import { runOnboardingAudit } from "@/lib/audit/runOnboardingAudit";
 
 export const maxDuration = 300;
 
@@ -40,10 +41,17 @@ async function runWorker(req: Request) {
       const run = await getAuditRun(job.audit_run_id);
       if (!run) throw new Error("Missing audit run");
 
-      await updateAuditRun({ id: run.id, status: "running", error: null });
-      await runMultiPageAudit({ auditRunId: run.id, url: run.normalized_url });
-      await updateAuditJob({ id: job.id, status: "done", error: null });
-      await updateAuditRun({ id: run.id, status: "done" });
+      const jobType = (job as Record<string, unknown>).job_type as string | undefined;
+
+      if (jobType === "onboarding_audit") {
+        await runOnboardingAudit({ auditRunId: run.id, url: run.normalized_url });
+        await updateAuditJob({ id: job.id, status: "done", error: null });
+      } else {
+        await updateAuditRun({ id: run.id, status: "running", error: null });
+        await runMultiPageAudit({ auditRunId: run.id, url: run.normalized_url });
+        await updateAuditJob({ id: job.id, status: "done", error: null });
+        await updateAuditRun({ id: run.id, status: "done" });
+      }
       results.push({ jobId: job.id, auditRunId: run.id, status: "done" });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";

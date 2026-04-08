@@ -14,7 +14,8 @@ export async function POST(req: Request) {
     const normalizedUrl = await validatePublicHttpUrl(rawUrl);
     const { id } = await createAuditRun({ url: rawUrl, normalizedUrl });
 
-    await enqueueAuditJob({ auditRunId: id });
+    await enqueueAuditJob({ auditRunId: id, jobType: "cro_audit" });
+    await enqueueAuditJob({ auditRunId: id, jobType: "onboarding_audit" });
 
     return NextResponse.json({ id }, { status: 201 });
   } catch (err) {

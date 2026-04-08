@@ -1,9 +1,10 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
-import type { AuditJobStatus } from "@/lib/db/types";
+import type { AuditJobStatus, AuditJobType } from "@/lib/db/types";
 
 export type AuditJobRow = {
   id: string;
   audit_run_id: string;
+  job_type: AuditJobType;
   status: AuditJobStatus;
   attempts: number;
   locked_at: string | null;
@@ -14,10 +15,11 @@ export type AuditJobRow = {
   updated_at: string;
 };
 
-export async function enqueueAuditJob(params: { auditRunId: string }) {
+export async function enqueueAuditJob(params: { auditRunId: string; jobType?: AuditJobType }) {
   const sb = supabaseAdmin();
   const { error } = await sb.from("audit_jobs").insert({
     audit_run_id: params.auditRunId,
+    job_type: params.jobType ?? "cro_audit",
     status: "queued" satisfies AuditJobStatus,
   });
   if (error) throw error;
