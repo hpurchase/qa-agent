@@ -1,4 +1,5 @@
 import { downloadBytes, firecrawlScrape } from "@/lib/firecrawl";
+import sharp from "sharp";
 import { insertArtifact, insertFinding, updateAuditRun } from "@/lib/db/auditRuns";
 import {
   insertAuditTarget,
@@ -36,6 +37,26 @@ function extFor(mt: string) {
   if (mt === "image/gif") return "gif";
   if (mt === "image/webp") return "webp";
   return "jpg";
+}
+
+async function resizeForVision(bytes: ArrayBuffer): Promise<{ bytes: ArrayBuffer; mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" }> {
+  const img = sharp(Buffer.from(bytes));
+  const meta = await img.metadata();
+  const maxEdge = 1568;
+  const w = meta.width ?? 0;
+  const h = meta.height ?? 0;
+  if (w <= maxEdge && h <= maxEdge) {
+    return { bytes, mediaType: "image/jpeg" };
+  }
+  const resized = await img.resize({
+    width: w > h ? maxEdge : undefined,
+    height: h >= w ? maxEdge : undefined,
+    fit: "inside",
+    withoutEnlargement: true,
+  }).jpeg({ quality: 85 }).toBuffer();
+  const ab = new ArrayBuffer(resized.byteLength);
+  new Uint8Array(ab).set(resized);
+  return { bytes: ab, mediaType: "image/jpeg" };
 }
 
 type CapturedTarget = {
@@ -436,18 +457,15 @@ export async function runMultiPageAudit(params: { auditRunId: string; url: strin
 
     const primary = homepageCaptured ?? captured[0];
     if (primary) {
+      const desktopVision = primary.desktopShotBytes ? await resizeForVision(primary.desktopShotBytes) : null;
+      const mobileVision = primary.mobileShotBytes ? await resizeForVision(primary.mobileShotBytes) : null;
+
       const llm = await generateGroundedRecommendations({
         evidence: primary.evidence,
         siteSummary,
         screenshots: {
-          desktop:
-            primary.desktopShotBytes && primary.desktopShotMediaType
-              ? { bytes: primary.desktopShotBytes, mediaType: primary.desktopShotMediaType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" }
-              : undefined,
-          mobile:
-            primary.mobileShotBytes && primary.mobileShotMediaType
-              ? { bytes: primary.mobileShotBytes, mediaType: primary.mobileShotMediaType as "image/jpeg" | "image/png" | "image/gif" | "image/webp" }
-              : undefined,
+          desktop: desktopVision ?? undefined,
+          mobile: mobileVision ?? undefined,
         },
       });
 

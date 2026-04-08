@@ -357,16 +357,18 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
                     </span>
                     <span className="truncate text-xs text-zinc-400">{target.url}</span>
                   </div>
-                  <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-2">
+                  <div className="grid grid-cols-2 gap-4 p-4">
                     <div>
                       <div className="mb-2 text-xs font-medium text-zinc-500">Desktop</div>
                       {urls?.desktop ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={urls.desktop}
-                          alt={`${roleLabel(target.role)} desktop`}
-                          className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800"
-                        />
+                        <div className="max-h-[500px] overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={urls.desktop}
+                            alt={`${roleLabel(target.role)} desktop`}
+                            className="w-full"
+                          />
+                        </div>
                       ) : (
                         <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400 dark:border-zinc-800">
                           {isRunning ? "Capturing…" : "Not available"}
@@ -376,14 +378,16 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
                     <div>
                       <div className="mb-2 text-xs font-medium text-zinc-500">Mobile</div>
                       {urls?.mobile ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={urls.mobile}
-                          alt={`${roleLabel(target.role)} mobile`}
-                          className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800"
-                        />
+                        <div className="mx-auto max-h-[500px] max-w-[200px] overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={urls.mobile}
+                            alt={`${roleLabel(target.role)} mobile`}
+                            className="w-full"
+                          />
+                        </div>
                       ) : (
-                        <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400 dark:border-zinc-800">
+                        <div className="mx-auto flex h-40 max-w-[200px] items-center justify-center rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400 dark:border-zinc-800">
                           {isRunning ? "Capturing…" : "Not available"}
                         </div>
                       )}

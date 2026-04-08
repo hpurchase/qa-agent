@@ -13,6 +13,52 @@ export type DiscoveryResult = {
   allCandidates: DiscoveredCandidate[];
 };
 
+const SIGNUP_PROBE_PATHS = ["/signup", "/sign-up", "/register", "/login", "/start"];
+
+async function probeUrl(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, { method: "HEAD", redirect: "follow" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function rootDomain(hostname: string): string {
+  const parts = hostname.split(".");
+  return parts.slice(-2).join(".");
+}
+
+async function probeSubdomainSignup(baseUrl: string): Promise<DiscoveredCandidate | null> {
+  const base = new URL(baseUrl);
+  const root = rootDomain(base.hostname);
+  const subdomains = [`app.${root}`, `dashboard.${root}`];
+
+  for (const subdomain of subdomains) {
+    for (const path of SIGNUP_PROBE_PATHS) {
+      const candidate = `https://${subdomain}${path}`;
+      if (await probeUrl(candidate)) {
+        return { url: candidate, role: "signup", confidence: "medium", source: "href_pattern" };
+      }
+    }
+    // Also try the bare subdomain root.
+    const bare = `https://${subdomain}`;
+    if (await probeUrl(bare)) {
+      return { url: bare, role: "signup", confidence: "low", source: "href_pattern" };
+    }
+  }
+
+  // Also probe same-domain signup paths.
+  for (const path of SIGNUP_PROBE_PATHS) {
+    const candidate = `${base.origin}${path}`;
+    if (await probeUrl(candidate)) {
+      return { url: candidate, role: "signup", confidence: "medium", source: "href_pattern" };
+    }
+  }
+
+  return null;
+}
+
 export async function discoverTargets(params: {
   baseUrl: string;
   evidence: EvidencePack;
@@ -20,7 +66,7 @@ export async function discoverTargets(params: {
 }): Promise<DiscoveryResult> {
   const all: DiscoveredCandidate[] = [];
 
-  // Step A: extract from homepage evidence (free — already scraped).
+  // Step A: extract from homepage evidence (free).
   const fromEvidence = extractCandidatesFromEvidence(params.evidence, params.baseUrl);
   all.push(...fromEvidence);
 
@@ -37,11 +83,20 @@ export async function discoverTargets(params: {
       if (!pricing) pricing = pickBestCandidate(all, "pricing");
       if (!signup) signup = pickBestCandidate(all, "signup");
     } catch {
-      // Map failure is non-fatal; continue with what we have.
+      // Map failure is non-fatal.
     }
   }
 
-  // Step C: if signup still missing and we have a scrapeId, use Interact.
+  // Step C: if signup still missing, probe common subdomain + path combinations (free HTTP HEAD).
+  if (!signup) {
+    const probed = await probeSubdomainSignup(params.baseUrl);
+    if (probed) {
+      all.push(probed);
+      signup = probed;
+    }
+  }
+
+  // Step D: if signup still missing and we have a scrapeId, use Interact (last resort).
   if (!signup && params.homepageScrapeId) {
     try {
       const result = await firecrawlInteract({

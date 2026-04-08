@@ -14,117 +14,149 @@ function uniqByLower(xs: string[]) {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const x of xs) {
-    const k = x.toLowerCase();
-    if (seen.has(k)) continue;
+    const k = x.toLowerCase().trim();
+    if (!k || seen.has(k)) continue;
     seen.add(k);
     out.push(x);
   }
   return out;
 }
 
+const NOISE_CTA = /^(skip|open|close|menu|toggle|×|x|→|←|↓|↑|\d+|0)$/i;
+const NOISE_PREFIX = /^(skip to|open menu|close menu)/i;
+const PRIMARY_CTA = /trial|sign\s?up|signup|get\s?started|start\s?now|start\s?free|create\s?account|register/i;
+const WAITLIST_CTA = /waitlist|early access|rsvp|notify|coming soon|join.*list/i;
+const SALES_CTA = /request.*demo|book.*demo|book.*call|talk.*sales|contact.*sales|schedule.*demo/i;
+
+function isRealCta(label: string): boolean {
+  const t = label.trim();
+  if (t.length < 3 || t.length > 50) return false;
+  if (NOISE_CTA.test(t) || NOISE_PREFIX.test(t)) return false;
+  return true;
+}
+
+function q(s: string) {
+  return `"${s}"`;
+}
+
 export function runHeuristicCroChecks(e: EvidencePack): CroFinding[] {
   const findings: CroFinding[] = [];
 
-  const h1Count = e.headings.h1.length;
-  if (h1Count === 0) {
-    findings.push({
-      id: "missing_h1",
-      severity: "high",
-      title: "Missing H1 headline",
-      recommendation: "Add a single, specific H1 that clearly states the product outcome.",
-      whyItMatters: "For PLG SaaS, unclear above-the-fold messaging lowers trial/signup conversion.",
-      evidence: { h1: e.headings.h1 },
-      howToTest: "A/B test a benefit-led H1 vs your current headline.",
-    });
-  } else if (h1Count > 1) {
-    findings.push({
-      id: "multiple_h1",
-      severity: "med",
-      title: "Multiple H1s competing",
-      recommendation: "Reduce to one dominant H1 and demote others to H2/H3.",
-      whyItMatters: "A single clear value prop improves scanning and CTA comprehension.",
-      evidence: { h1: e.headings.h1.slice(0, 5) },
-      howToTest: "Measure click-through to primary CTA and scroll depth after simplifying the hero.",
-    });
-  }
+  const realCtas = e.ctas.filter((c) => isRealCta(c.label));
+  const primaryCtas = realCtas.filter((c) => PRIMARY_CTA.test(c.label));
+  const waitlistCtas = realCtas.filter((c) => WAITLIST_CTA.test(c.label));
+  const salesCtas = realCtas.filter((c) => SALES_CTA.test(c.label));
 
-  const ctaLabels = e.ctas.map((c) => c.label);
-  const uniqueCtas = uniqByLower(ctaLabels).slice(0, 20);
-  if (uniqueCtas.length >= 6) {
-    findings.push({
-      id: "too_many_ctas",
-      severity: "med",
-      title: "Too many competing CTAs",
-      recommendation: "Pick 1 primary PLG action (Start trial / Sign up) and 1 secondary action.",
-      whyItMatters: "PLG landing pages convert better when the decision is obvious.",
-      evidence: { uniqueCtas },
-      howToTest: "A/B test reducing CTA variants and standardizing labels across the page.",
-    });
-  }
+  const isPreLaunch = waitlistCtas.length > 0 || /coming soon|beta|early access|waitlist|launching/i.test(
+    [...e.headings.h1, ...e.headings.h2].join(" "),
+  );
+  const isLive = primaryCtas.length > 0 || e.plg.signupLinkHrefs.length > 0;
 
-  const navCtas = e.ctas.filter((c) => c.locationHint === "nav").map((c) => c.label);
-  const navUnique = uniqByLower(navCtas);
-  const hasTrialish = navUnique.some((x) => /trial|sign\s?up|get started/i.test(x));
-  if (!hasTrialish) {
-    findings.push({
-      id: "nav_missing_primary_cta",
-      severity: "low",
-      title: "Nav lacks a clear primary PLG CTA",
-      recommendation: "Add a consistent “Start free trial” or “Sign up” button in the top navigation.",
-      whyItMatters: "Visitors often decide without scrolling; a visible CTA improves conversion.",
-      evidence: { navLabels: e.navLabels.slice(0, 20) },
-      howToTest: "Track CTR on nav CTA and downstream signup completion rate.",
-    });
-  }
-
-  if (e.plg.pricingLinkHrefs.length === 0) {
-    findings.push({
-      id: "missing_pricing_path",
-      severity: "med",
-      title: "No obvious path to pricing",
-      recommendation: "Add a clear “Pricing” link in nav and/or in the hero to support self-serve evaluation.",
-      whyItMatters: "PLG buyers often need pricing clarity before starting a trial.",
-      evidence: { navLabels: e.navLabels.slice(0, 20) },
-      howToTest: "Add a pricing link and measure impact on trial starts and pricing-page engagement.",
-    });
-  }
-
-  if (e.forms.some((f) => f.fields >= 7)) {
+  // --- FORM FRICTION (objective, high impact) ---
+  const longForms = e.forms.filter((f) => f.fields >= 5);
+  if (longForms.length > 0) {
+    const worst = longForms.sort((a, b) => b.fields - a.fields)[0];
+    const fieldList = worst.labels.length > 0
+      ? worst.labels.slice(0, 5).map(q).join(", ")
+      : `${worst.fields} input fields`;
     findings.push({
       id: "high_form_friction",
       severity: "high",
-      title: "High signup/contact friction detected",
-      recommendation: "Reduce required fields for initial signup; defer non-essential fields until after activation.",
-      whyItMatters: "PLG conversion drops sharply as form friction increases.",
-      evidence: { forms: e.forms },
-      howToTest: "A/B test a shorter signup form and measure completion + activation rate.",
+      title: `Signup form has ${worst.fields} fields — reduce to 1-3`,
+      recommendation: `Found a form with ${worst.fields} fields (${fieldList}). Best-in-class PLG signup uses email-only or email + password. Move everything else to post-signup onboarding.`,
+      whyItMatters: `Each additional form field drops completion rate by ~10-15%. A ${worst.fields}-field form likely loses 40%+ of potential signups.`,
+      evidence: { fieldCount: worst.fields, labels: worst.labels, hasPassword: worst.hasPassword },
+      howToTest: "A/B test: current form vs email-only signup. Track form completion rate and 7-day activation.",
     });
   }
 
-  if (e.plg.demoOnlyCues) {
+  // --- SALES-LED MISMATCH (objective — page has demo but no trial) ---
+  if (!isPreLaunch && salesCtas.length > 0 && primaryCtas.length === 0) {
+    const salesLabels = uniqByLower(salesCtas.map((c) => c.label));
     findings.push({
-      id: "plg_motion_mismatch",
+      id: "sales_led_no_selfserve",
       severity: "high",
-      title: "Page appears sales-led (demo-first) rather than PLG",
-      recommendation: "If PLG is the goal, introduce a self-serve trial/signup path alongside demo for larger teams.",
-      whyItMatters: "A PLG landing page should make the self-serve path unmissable.",
-      evidence: { demoOnlyCues: true },
-      howToTest: "Add a trial path and compare signups by segment vs demo requests.",
+      title: `Only sales CTAs found: ${salesLabels.slice(0, 3).map(q).join(", ")} — no self-serve option`,
+      recommendation: `The page has ${salesLabels.length} sales-oriented CTA(s) (${salesLabels.map(q).join(", ")}) but zero self-serve signup/trial options. Add a "Start free trial" button alongside the demo CTA to capture PLG-intent visitors.`,
+      whyItMatters: "~60% of SaaS buyers prefer to try before talking to sales. Without a self-serve path, you lose them to competitors that offer one.",
+      evidence: { salesLabels, primaryCtaCount: 0, signupLinks: e.plg.signupLinkHrefs.length },
+      howToTest: "Add a free trial CTA next to the demo CTA. Measure: trial starts vs demo requests, and which converts to paid faster.",
     });
   }
 
-  if (!e.plg.mentionsNoCreditCard && (e.plg.signupLinkHrefs.length > 0 || e.ctas.some((c) => /trial|sign\s?up/i.test(c.label)))) {
+  // --- CTA LABEL INCONSISTENCY (objective — count and list the variants) ---
+  if (isLive) {
+    const primaryLabels = uniqByLower(primaryCtas.map((c) => c.label));
+    if (primaryLabels.length >= 3) {
+      findings.push({
+        id: "cta_inconsistency",
+        severity: "med",
+        title: `${primaryLabels.length} different signup CTA labels: ${primaryLabels.slice(0, 4).map(q).join(", ")}`,
+        recommendation: `The page uses ${primaryLabels.length} different labels for the same action: ${primaryLabels.map(q).join(", ")}. Pick one (recommend ${q(primaryLabels[0])}) and use it everywhere — hero, nav, pricing table, sticky header.`,
+        whyItMatters: "Inconsistent CTA labels make visitors second-guess whether each button does the same thing. Consistency increases click-through.",
+        evidence: { labels: primaryLabels, locations: primaryCtas.map((c) => ({ label: c.label, location: c.locationHint })) },
+        howToTest: "Unify all signup CTAs to one label. Measure: overall CTA CTR and homepage-to-signup conversion.",
+      });
+    }
+  }
+
+  // --- PRICING VISIBILITY (objective — check nav + page links) ---
+  const hasPricingNav = e.navLabels.some((l) => /pricing|plans/i.test(l));
+  const hasPricingLinks = e.plg.pricingLinkHrefs.length > 0;
+  if (!hasPricingNav && !hasPricingLinks && !isPreLaunch) {
     findings.push({
-      id: "missing_reassurance",
-      severity: "low",
-      title: "Trial reassurance may be missing",
-      recommendation: "Add reassurance near the primary CTA (e.g. “No credit card required”, “Cancel anytime”).",
-      whyItMatters: "Reducing perceived risk increases PLG CTA clicks.",
-      evidence: { mentionsNoCreditCard: e.plg.mentionsNoCreditCard, mentionsCancelAnytime: e.plg.mentionsCancelAnytime },
-      howToTest: "A/B test reassurance copy near the hero CTA and measure CTA CTR.",
+      id: "no_pricing",
+      severity: "med",
+      title: "No pricing link found in navigation or page body",
+      recommendation: `Checked ${e.navLabels.length} nav items (${e.navLabels.slice(0, 6).map(q).join(", ")}) and ${e.ctas.length} page links — none point to pricing. Add a "Pricing" link in the main nav.`,
+      whyItMatters: "PLG buyers evaluate pricing early. If they can't find it, they assume it's expensive or enterprise-only and leave.",
+      evidence: { navLabels: e.navLabels.slice(0, 15), pricingLinksFound: 0 },
+      howToTest: "Add a Pricing nav link. Track: pricing page visits, and pricing→signup conversion.",
     });
   }
 
-  return findings.slice(0, 10);
-}
+  // --- PRICING TABLE QUALITY (if we have pricing data) ---
+  const ps = e.plg.pricingSummary;
+  if (ps && ps.plans.length > 0) {
+    const missingPrices = ps.plans.filter((p) => !p.priceText);
+    if (missingPrices.length > 0) {
+      findings.push({
+        id: "pricing_unclear",
+        severity: "med",
+        title: `${missingPrices.length} of ${ps.plans.length} pricing plans have no visible price`,
+        recommendation: `Plans without clear pricing: ${missingPrices.map((p) => q(p.name)).join(", ")}. Show exact prices for all plans. "Contact us" pricing signals enterprise and scares away SMB/PLG buyers.`,
+        whyItMatters: "Transparent pricing builds trust and lets visitors self-qualify. Hidden pricing increases bounce.",
+        evidence: { plans: ps.plans.map((p) => ({ name: p.name, price: p.priceText })) },
+        howToTest: "Show prices for all plans. Measure: pricing page bounce rate and plan selection rate.",
+      });
+    }
 
+    const noneRecommended = ps.plans.every((p) => !p.isMostPopular);
+    if (noneRecommended && ps.plans.length >= 2) {
+      findings.push({
+        id: "no_recommended_plan",
+        severity: "low",
+        title: `${ps.plans.length} plans shown but none highlighted as recommended`,
+        recommendation: `Plans: ${ps.plans.map((p) => q(p.name)).join(", ")}. Highlight one as "Most Popular" or "Recommended" to reduce decision paralysis.`,
+        whyItMatters: "A recommended plan acts as an anchor and increases conversion by 15-25% vs equal-weight options.",
+        evidence: { planNames: ps.plans.map((p) => p.name) },
+        howToTest: "Add a 'Most Popular' badge to one plan. Measure: plan selection distribution and overall signup rate.",
+      });
+    }
+  }
+
+  // --- TRUST SIGNALS (objective presence check) ---
+  if (!e.trustSignals.hasTestimonials && !e.trustSignals.hasLogoStrip && !isPreLaunch) {
+    findings.push({
+      id: "no_social_proof",
+      severity: "low",
+      title: "No customer logos, testimonials, or case studies detected",
+      recommendation: "Add social proof: customer logos, a testimonial quote, or a case study stat (e.g. '2,000+ teams use [product]'). Place it below the hero section.",
+      whyItMatters: "Social proof is the #1 trust builder for unknown SaaS brands. Without it, visitors rely solely on your copy.",
+      evidence: { hasTestimonials: false, hasLogoStrip: false, mentionsSOC2: e.trustSignals.mentionsSOC2, mentionsGDPR: e.trustSignals.mentionsGDPR },
+      howToTest: "Add a logo strip below the hero. Measure: scroll depth past the hero and CTA CTR.",
+    });
+  }
+
+  return findings;
+}
