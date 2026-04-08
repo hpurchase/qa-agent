@@ -17,12 +17,11 @@ type FirecrawlMapResponse = {
 
 type FirecrawlInteractResponse = {
   success?: boolean;
-  data?: {
-    markdown?: string;
-    html?: string;
-    metadata?: { url?: string; scrapeId?: string };
-    actions?: { screenshots?: string[] };
-  };
+  output?: string;
+  result?: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
   error?: string;
 };
 
@@ -111,7 +110,7 @@ export async function firecrawlMap(params: {
 export async function firecrawlInteract(params: {
   scrapeId: string;
   prompt: string;
-}): Promise<{ url: string | null; html: string; screenshotUrl: string | null }> {
+}): Promise<{ output: string | null }> {
   const res = await fetch(
     `https://api.firecrawl.dev/v2/scrape/${params.scrapeId}/interact`,
     {
@@ -129,10 +128,44 @@ export async function firecrawlInteract(params: {
   const json = (await res.json()) as FirecrawlInteractResponse;
   if (json.success === false) throw new Error(json.error || "Firecrawl interact failed");
 
+  return { output: json.output ?? null };
+}
+
+export type InteractCodeResult = {
+  result: string | null;
+  stdout: string | null;
+  exitCode: number;
+};
+
+/**
+ * Execute Playwright code in an existing Firecrawl session.
+ * Returns the code's result/stdout and exit code.
+ */
+export async function firecrawlInteractCode(params: {
+  scrapeId: string;
+  code: string;
+}): Promise<InteractCodeResult> {
+  const res = await fetch(
+    `https://api.firecrawl.dev/v2/scrape/${params.scrapeId}/interact`,
+    {
+      method: "POST",
+      headers: firecrawlHeaders(),
+      body: JSON.stringify({ code: params.code }),
+    },
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Firecrawl interact code error: ${res.status} ${res.statusText} ${text}`);
+  }
+
+  const json = (await res.json()) as FirecrawlInteractResponse;
+  if (json.success === false) throw new Error(json.error || "Firecrawl interact code failed");
+
   return {
-    url: json.data?.metadata?.url ?? null,
-    html: json.data?.html ?? "",
-    screenshotUrl: json.data?.actions?.screenshots?.[0] ?? null,
+    result: json.result ?? null,
+    stdout: json.stdout ?? null,
+    exitCode: json.exitCode ?? 0,
   };
 }
 

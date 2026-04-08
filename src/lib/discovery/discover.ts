@@ -5,7 +5,7 @@ import {
   pickBestCandidate,
   type DiscoveredCandidate,
 } from "@/lib/discovery/candidates";
-import { firecrawlMap, firecrawlInteract, firecrawlInteractStop } from "@/lib/firecrawl";
+import { firecrawlMap, firecrawlInteractCode, firecrawlInteractStop } from "@/lib/firecrawl";
 
 export type DiscoveryResult = {
   pricing: DiscoveredCandidate | null;
@@ -109,26 +109,47 @@ export async function discoverTargets(params: {
     }
   }
 
-  // Step D: if signup still missing and we have a scrapeId, use Interact (last resort).
+  // Step D: if signup still missing and we have a scrapeId, use Interact code (last resort).
   if (!signup && params.homepageScrapeId) {
     try {
-      const result = await firecrawlInteract({
+      const code = `
+        const links = await page.locator('a').all();
+        for (const link of links) {
+          const text = (await link.textContent() || '').toLowerCase().trim();
+          if (/sign\\s?up|start\\s?(free\\s)?trial|get\\s?started|create\\s?account/.test(text)) {
+            const href = await link.getAttribute('href');
+            if (href) {
+              await link.click();
+              await page.waitForTimeout(2000);
+              JSON.stringify({ url: page.url() });
+              break;
+            }
+          }
+        }
+        JSON.stringify({ url: page.url() });
+      `;
+      const result = await firecrawlInteractCode({
         scrapeId: params.homepageScrapeId,
-        prompt:
-          "Find and click the primary Sign up, Start free trial, or Get started button. Do not submit any forms. Return the URL of the page you land on.",
+        code,
       });
 
-      const resultNorm = result.url?.replace(/\/+$/, "").toLowerCase();
-      const baseNorm = params.baseUrl.replace(/\/+$/, "").toLowerCase();
-      if (resultNorm && resultNorm !== baseNorm) {
-        const candidate: DiscoveredCandidate = {
-          url: result.url!,
-          role: "signup",
-          confidence: "medium",
-          source: "interact",
-        };
-        all.push(candidate);
-        signup = candidate;
+      const raw = result.result ?? result.stdout ?? "";
+      try {
+        const parsed = JSON.parse(raw) as { url?: string };
+        const resultNorm = parsed.url?.replace(/\/+$/, "").toLowerCase();
+        const baseNorm = params.baseUrl.replace(/\/+$/, "").toLowerCase();
+        if (resultNorm && resultNorm !== baseNorm && parsed.url) {
+          const candidate: DiscoveredCandidate = {
+            url: parsed.url,
+            role: "signup",
+            confidence: "medium",
+            source: "interact",
+          };
+          all.push(candidate);
+          signup = candidate;
+        }
+      } catch {
+        // Parse failure is non-fatal.
       }
 
       await firecrawlInteractStop(params.homepageScrapeId);

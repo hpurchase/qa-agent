@@ -37,13 +37,15 @@ async function runWorker(req: Request) {
     const job = await claimNextAuditJob({ lockedBy: workerId });
     if (!job) break;
 
+    const jobType = (job as Record<string, unknown>).job_type as string | undefined;
+    const isOnboarding = jobType === "onboarding_audit";
+
     try {
       const run = await getAuditRun(job.audit_run_id);
       if (!run) throw new Error("Missing audit run");
 
-      const jobType = (job as Record<string, unknown>).job_type as string | undefined;
-
-      if (jobType === "onboarding_audit") {
+      if (isOnboarding) {
+        // Onboarding runs independently -- only touches onboarding_status, never audit_runs.status.
         await runOnboardingAudit({ auditRunId: run.id, url: run.normalized_url });
         await updateAuditJob({ id: job.id, status: "done", error: null });
       } else {
@@ -60,10 +62,6 @@ async function runWorker(req: Request) {
       const isAnthropic = message.toLowerCase().includes("anthropic") || message.includes("not_found_error") || message.includes("request_id");
       const isNonRetriableModel = message.includes("not_found_error") && message.includes("model:");
 
-      // Policy:
-      // - Firecrawl failures: do NOT retry automatically (wastes credits).
-      // - Claude/Anthropic failures: retry up to 2 times.
-      // - Non-retriable model errors: fail immediately.
       const maxAttempts = isFirecrawl ? 1 : isAnthropic ? 2 : 3;
 
       if (!isNonRetriableModel && attempts < maxAttempts) {
@@ -74,11 +72,19 @@ async function runWorker(req: Request) {
           error: message,
           runAfter: new Date(Date.now() + delayMs),
         });
-        await updateAuditRun({ id: job.audit_run_id, status: "queued", error: message });
+        if (!isOnboarding) {
+          await updateAuditRun({ id: job.audit_run_id, status: "queued", error: message });
+        }
         results.push({ jobId: job.id, auditRunId: job.audit_run_id, status: "requeued", error: message });
       } else {
         await updateAuditJob({ id: job.id, status: "failed", error: message });
-        await updateAuditRun({ id: job.audit_run_id, status: "failed", error: message });
+        if (isOnboarding) {
+          // Only mark onboarding as failed, don't touch the CRO audit status.
+          const sb = await import("@/lib/supabase/server").then((m) => m.supabaseAdmin());
+          await sb.from("audit_runs").update({ onboarding_status: "failed", onboarding_summary: { error: message } }).eq("id", job.audit_run_id);
+        } else {
+          await updateAuditRun({ id: job.audit_run_id, status: "failed", error: message });
+        }
         results.push({ jobId: job.id, auditRunId: job.audit_run_id, status: "failed", error: message });
       }
     }

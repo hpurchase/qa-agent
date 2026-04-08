@@ -178,13 +178,13 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
 
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
-      <AuditAutoRefresh status={run.status} />
+      <AuditAutoRefresh status={run.status} onboardingStatus={onboardingStatus} />
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            CRO Audit
+            SaaS Growth Audit
           </h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{run.normalized_url}</p>
         </div>
@@ -225,28 +225,88 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
         )}
       </div>
 
-      {/* Progress steps (only while running) */}
-      {isRunning ? (
-        <div className="mt-3 grid grid-cols-4 gap-2">
-          {(["discover", "capture", "analysis", "claude"] as const).map((s) => {
-            const st = stepState(stage, s);
-            return (
-              <div
-                key={s}
-                className={`rounded-lg px-3 py-2 text-center text-xs font-medium transition-colors ${
-                  st === "done"
-                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200"
-                    : st === "doing"
-                      ? "bg-zinc-900 text-white animate-pulse dark:bg-zinc-100 dark:text-zinc-900"
-                      : "bg-zinc-100 text-zinc-400 dark:bg-zinc-900 dark:text-zinc-600"
-                }`}
-              >
-                {STEP_LABELS[s] ?? s}
-              </div>
-            );
-          })}
+      {/* Two-job progress (always visible when not both done) */}
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        {/* CRO progress */}
+        <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="flex items-center gap-2 mb-2">
+            <div className={`h-2 w-2 rounded-full ${isDone ? "bg-emerald-500" : isFailed ? "bg-red-500" : "animate-pulse bg-blue-500"}`} />
+            <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">Website CRO</span>
+            <span className="ml-auto text-[10px] text-zinc-400">
+              {isDone ? "Complete" : isFailed ? "Failed" : stage ? STEP_LABELS[stage] ?? stage : "Starting"}
+            </span>
+          </div>
+          {isRunning && (
+            <div className="flex gap-1">
+              {(["discover", "capture", "analysis", "claude"] as const).map((s) => {
+                const st = stepState(stage, s);
+                return (
+                  <div
+                    key={s}
+                    className={`h-1 flex-1 rounded-full transition-colors ${
+                      st === "done"
+                        ? "bg-emerald-400 dark:bg-emerald-600"
+                        : st === "doing"
+                          ? "bg-blue-500 animate-pulse"
+                          : "bg-zinc-200 dark:bg-zinc-800"
+                    }`}
+                  />
+                );
+              })}
+            </div>
+          )}
+          {isDone && (
+            <div className="flex gap-1">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="h-1 flex-1 rounded-full bg-emerald-400 dark:bg-emerald-600" />
+              ))}
+            </div>
+          )}
         </div>
-      ) : null}
+
+        {/* Onboarding progress */}
+        <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="flex items-center gap-2 mb-2">
+            <div className={`h-2 w-2 rounded-full ${
+              onboardingDone
+                ? obFinalStatus === "blocked" ? "bg-amber-500" : "bg-emerald-500"
+                : onboardingFailed
+                  ? "bg-red-500"
+                  : onboardingRunning
+                    ? "animate-pulse bg-violet-500"
+                    : "bg-zinc-300 dark:bg-zinc-700"
+            }`} />
+            <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">Onboarding Flow</span>
+            <span className="ml-auto text-[10px] text-zinc-400">
+              {obFinalStatus === "done"
+                ? "Complete"
+                : obFinalStatus === "blocked"
+                  ? "Blocked"
+                  : onboardingFailed
+                    ? "Failed"
+                    : onboardingRunning
+                      ? "Signing up..."
+                      : "Queued"}
+            </span>
+          </div>
+          <div className="flex gap-1">
+            {onboardingRunning && !onboardingDone && !onboardingFailed ? (
+              <div className="h-1 flex-1 rounded-full bg-violet-500 animate-pulse" />
+            ) : onboardingDone ? (
+              <div className={`h-1 flex-1 rounded-full ${obFinalStatus === "blocked" ? "bg-amber-400 dark:bg-amber-600" : "bg-emerald-400 dark:bg-emerald-600"}`} />
+            ) : onboardingFailed ? (
+              <div className="h-1 flex-1 rounded-full bg-red-400 dark:bg-red-600" />
+            ) : (
+              <div className="h-1 flex-1 rounded-full bg-zinc-200 dark:bg-zinc-800" />
+            )}
+          </div>
+          {onboardingRunning && (
+            <p className="mt-2 text-[10px] text-zinc-400">
+              Navigating signup flow as test user...
+            </p>
+          )}
+        </div>
+      </div>
 
       {/* Pages discovered */}
       {targets.length > 0 ? (
@@ -375,90 +435,11 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
           </div>
         ) : null}
 
-        {/* Screenshots per target */}
-        {targets.length > 0
-          ? targets.map((target) => {
-              const urls = screenshotUrls.get(target.id);
-              return (
-                <div
-                  key={target.id}
-                  id={`page-${target.role}`}
-                  className="rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
-                >
-                  <div className="flex items-center gap-3 border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
-                    <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                      {roleLabel(target.role)}
-                    </span>
-                    <span className="truncate text-xs text-zinc-400">{target.url}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4 p-4">
-                    <div>
-                      <div className="mb-2 text-xs font-medium text-zinc-500">Desktop</div>
-                      {urls?.desktop ? (
-                        <div className="max-h-[500px] overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={urls.desktop}
-                            alt={`${roleLabel(target.role)} desktop`}
-                            className="w-full"
-                          />
-                        </div>
-                      ) : (
-                        <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400 dark:border-zinc-800">
-                          {isRunning ? "Capturing…" : "Not available"}
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <div className="mb-2 text-xs font-medium text-zinc-500">Mobile</div>
-                      {urls?.mobile ? (
-                        <div className="mx-auto max-h-[500px] max-w-[200px] overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={urls.mobile}
-                            alt={`${roleLabel(target.role)} mobile`}
-                            className="w-full"
-                          />
-                        </div>
-                      ) : (
-                        <div className="mx-auto flex h-40 max-w-[200px] items-center justify-center rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400 dark:border-zinc-800">
-                          {isRunning ? "Capturing…" : "Not available"}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          : (() => {
-              const urls = screenshotUrls.get("legacy");
-              if (!urls?.desktop && !urls?.mobile) return null;
-              return (
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                  {urls?.desktop ? (
-                    <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-                      <div className="mb-3 text-sm font-medium text-zinc-900 dark:text-zinc-50">Desktop</div>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={urls.desktop} alt="Desktop" className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800" />
-                    </div>
-                  ) : null}
-                  {urls?.mobile ? (
-                    <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-                      <div className="mb-3 text-sm font-medium text-zinc-900 dark:text-zinc-50">Mobile</div>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={urls.mobile} alt="Mobile" className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800" />
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })()}
-
-        {/* ─── Onboarding Flow Section ─── */}
-        {(onboardingDone || onboardingRunning || onboardingFailed || onboardingSteps.length > 0) && (
-          <div className="mt-10">
-            <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-              Onboarding Flow
-            </h2>
+        {/* ─── Onboarding Flow Section (always visible) ─── */}
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            Onboarding Flow
+          </h2>
 
             {/* Summary bar */}
             <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
@@ -665,15 +646,83 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
               </div>
             )}
 
-            {/* Pending state */}
-            {onboardingRunning && onboardingSteps.length === 0 && (
-              <div className="mt-4 rounded-2xl border border-dashed border-zinc-200 p-8 text-center text-sm text-zinc-500 dark:border-zinc-800">
-                <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600" />
-                Signing up and mapping the onboarding flow…
+            {/* Pending / running state */}
+            {(onboardingRunning || onboardingStatus === "pending") && onboardingSteps.length === 0 && !onboardingFailed && (
+              <div className="mt-4 rounded-2xl border border-dashed border-zinc-200 p-8 text-center dark:border-zinc-800">
+                {onboardingRunning ? (
+                  <>
+                    <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-violet-300 border-t-violet-600" />
+                    <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Signing up as Jordan Rivera (Northlight Labs)</p>
+                    <p className="mt-1 text-xs text-zinc-400">Navigating the signup flow, filling forms, mapping each step...</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-zinc-500">Onboarding audit queued</p>
+                    <p className="mt-1 text-xs text-zinc-400">Will start shortly — runs independently from the CRO audit</p>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Failed state */}
+            {onboardingFailed && onboardingSteps.length === 0 && (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50/50 px-4 py-3 dark:border-red-900 dark:bg-red-950/30">
+                <p className="text-sm font-medium text-red-700 dark:text-red-300">Onboarding failed</p>
+                {obBlockedReason && (
+                  <p className="mt-1 text-xs text-red-600 dark:text-red-400">{obBlockedReason}</p>
+                )}
               </div>
             )}
           </div>
-        )}
+
+        {/* Screenshots per target */}
+        {targets.length > 0
+          ? targets.map((target) => {
+              const urls = screenshotUrls.get(target.id);
+              return (
+                <div
+                  key={target.id}
+                  id={`page-${target.role}`}
+                  className="rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
+                >
+                  <div className="flex items-center gap-3 border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
+                    <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                      {roleLabel(target.role)}
+                    </span>
+                    <span className="truncate text-xs text-zinc-400">{target.url}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 p-4">
+                    <div>
+                      <div className="mb-2 text-xs font-medium text-zinc-500">Desktop</div>
+                      {urls?.desktop ? (
+                        <div className="max-h-[500px] overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={urls.desktop} alt={`${roleLabel(target.role)} desktop`} className="w-full" />
+                        </div>
+                      ) : (
+                        <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400 dark:border-zinc-800">
+                          {isRunning ? "Capturing..." : "Not available"}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="mb-2 text-xs font-medium text-zinc-500">Mobile</div>
+                      {urls?.mobile ? (
+                        <div className="mx-auto max-h-[500px] max-w-[200px] overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={urls.mobile} alt={`${roleLabel(target.role)} mobile`} className="w-full" />
+                        </div>
+                      ) : (
+                        <div className="mx-auto flex h-40 max-w-[200px] items-center justify-center rounded-xl border border-dashed border-zinc-200 text-sm text-zinc-400 dark:border-zinc-800">
+                          {isRunning ? "Capturing..." : "Not available"}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          : null}
       </div>
     </div>
   );

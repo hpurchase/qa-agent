@@ -43,27 +43,22 @@ async function updateOnboardingStatus(auditRunId: string, status: OnboardingStat
 
 async function findSignupUrl(auditRunId: string, fallbackUrl: string): Promise<string> {
   const sb = supabaseAdmin();
+  const maxWaitMs = 60_000;
+  const pollIntervalMs = 10_000;
+  const deadline = Date.now() + maxWaitMs;
 
-  // Try to get the signup target discovered by the CRO audit.
-  const { data: targets } = await sb
-    .from("audit_targets")
-    .select("url, status")
-    .eq("audit_run_id", auditRunId)
-    .eq("role", "signup");
+  while (Date.now() < deadline) {
+    const { data: targets } = await sb
+      .from("audit_targets")
+      .select("url")
+      .eq("audit_run_id", auditRunId)
+      .eq("role", "signup");
 
-  const signupTarget = (targets as Array<{ url: string; status: string }> | null)?.[0];
-  if (signupTarget?.url) return signupTarget.url;
+    const found = (targets as Array<{ url: string }> | null)?.[0];
+    if (found?.url) return found.url;
 
-  // If CRO hasn't found one yet, wait briefly and retry.
-  await new Promise((r) => setTimeout(r, 15_000));
-  const { data: targets2 } = await sb
-    .from("audit_targets")
-    .select("url")
-    .eq("audit_run_id", auditRunId)
-    .eq("role", "signup");
-
-  const signupTarget2 = (targets2 as Array<{ url: string }> | null)?.[0];
-  if (signupTarget2?.url) return signupTarget2.url;
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+  }
 
   return fallbackUrl;
 }
