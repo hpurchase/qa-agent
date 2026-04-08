@@ -42,6 +42,7 @@ export async function firecrawlScrape(params: {
   url: string;
   mobile: boolean;
   viewport: { width: number; height: number };
+  takeScreenshot?: boolean;
 }) {
   const res = await fetch("https://api.firecrawl.dev/v2/scrape", {
     method: "POST",
@@ -51,14 +52,16 @@ export async function firecrawlScrape(params: {
       mobile: params.mobile,
       formats: ["markdown", "html"],
       onlyMainContent: false,
-      actions: [
-        {
-          type: "screenshot",
-          fullPage: true,
-          quality: 90,
-          viewport: params.viewport,
-        },
-      ],
+      actions: params.takeScreenshot
+        ? [
+            {
+              type: "screenshot",
+              fullPage: true,
+              quality: 90,
+              viewport: params.viewport,
+            },
+          ]
+        : [],
     }),
   });
 

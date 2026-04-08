@@ -24,7 +24,7 @@ export type RunResult = {
   blockedReason: string | null;
 };
 
-const MAX_STEPS = 5;
+const MAX_STEPS = 10;
 const MAX_DURATION_MS = 3 * 60 * 1000;
 
 type ClaudeDecision = {
@@ -83,6 +83,7 @@ function buildSystemPrompt(persona: TestPersona): string {
     "   - \"Select '11-50' from the Company Size dropdown\"",
     "   - \"Check the 'I agree to the Terms' checkbox\"",
     "   - \"Click the 'Skip' link\"",
+    `2b. If you see a password field, fill it with "${persona.password}" (unless already filled).`,
     "3. Always agree to terms and conditions.",
     "4. Skip optional steps (invite teammates, add avatar) by clicking Skip/Later/Not now.",
     "5. If you see a CAPTCHA or hCaptcha, return action=blocked.",
@@ -101,7 +102,7 @@ async function askClaude(params: {
   persona: TestPersona;
   screenshotBytes: ArrayBuffer | null;
   simplifiedDom: string;
-  previousSteps: Array<{ action: string; reason: string }>;
+  previousSteps: Array<{ action: string; instruction: string; reason: string }>;
 }): Promise<ClaudeDecision> {
   const client = anthropicClient();
   const model = anthropicModel();
@@ -126,7 +127,7 @@ async function askClaude(params: {
     const recent = params.previousSteps.slice(-5);
     historyContext =
       "\n\nPrevious actions taken:\n" +
-      recent.map((s, i) => `${i + 1}. ${s.action}: ${s.reason}`).join("\n") +
+      recent.map((s, i) => `${i + 1}. ${s.action}: ${s.instruction || ""} (${s.reason})`).join("\n") +
       "\n";
   }
 
@@ -164,6 +165,82 @@ async function askClaude(params: {
       action: "blocked",
       instruction: "",
       reason: `Failed to parse Claude response: ${text.slice(0, 200)}`,
+    };
+  }
+}
+
+async function askClaudeRecovery(params: {
+  persona: TestPersona;
+  screenshotBytes: ArrayBuffer | null;
+  simplifiedDom: string;
+  previousSteps: Array<{ action: string; instruction: string; reason: string }>;
+  stuckReason: string;
+}): Promise<ClaudeDecision> {
+  const client = anthropicClient();
+  const model = anthropicModel();
+
+  const content: MessageParam["content"] = [];
+  if (params.screenshotBytes) {
+    const resized = await resizeScreenshot(params.screenshotBytes);
+    content.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: "image/jpeg",
+        data: Buffer.from(resized).toString("base64"),
+      },
+    });
+    content.push({ type: "text", text: "Above: current screenshot of the page." });
+  }
+
+  const recent = params.previousSteps.slice(-6);
+  const last = recent[recent.length - 1];
+
+  content.push({
+    type: "text",
+    text: [
+      "We are stuck in the signup flow.",
+      `Stuck reason: ${params.stuckReason}`,
+      "",
+      "Visible interactive elements on the page:",
+      "```json",
+      params.simplifiedDom,
+      "```",
+      "",
+      "Recent actions:",
+      ...recent.map((s, i) => `${i + 1}. ${s.action} | ${s.instruction} | ${s.reason}`),
+      "",
+      "RECOVERY RULES:",
+      "1) Do NOT repeat the last instruction verbatim.",
+      "2) Prefer the smallest plausible unblocker: fill missing required field (often password), click primary submit/continue, scroll to reveal submit, dismiss modal, accept terms, or go back one step if needed.",
+      "3) Return ONE action only, as JSON in the normal format.",
+      last?.instruction ? `Last instruction (do not repeat): ${last.instruction}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  });
+
+  const msg = await client.messages.create({
+    model,
+    max_tokens: 450,
+    temperature: 0.2,
+    system: buildSystemPrompt(params.persona),
+    messages: [{ role: "user", content }],
+  });
+
+  const text = msg.content?.find((c) => c.type === "text")?.text ?? "";
+  try {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const jsonStr = fenced ? fenced[1].trim() : text.trim();
+    const braceStart = jsonStr.indexOf("{");
+    const braceEnd = jsonStr.lastIndexOf("}");
+    const clean = braceStart !== -1 ? jsonStr.slice(braceStart, braceEnd + 1) : jsonStr;
+    return JSON.parse(clean) as ClaudeDecision;
+  } catch {
+    return {
+      action: "wait",
+      instruction: "Wait 2 seconds for the page to finish loading.",
+      reason: `Recovery parse failed: ${text.slice(0, 200)}`,
     };
   }
 }
@@ -211,6 +288,55 @@ async function captureScreenshot(scrapeId: string): Promise<ArrayBuffer | null> 
   }
 }
 
+type FormInputState = {
+  type: string;
+  name: string | null;
+  id: string | null;
+  required: boolean;
+  autocomplete: string | null;
+  placeholder: string | null;
+  ariaLabel: string | null;
+  valueLength: number;
+};
+
+async function captureFormState(scrapeId: string): Promise<{ inputs: FormInputState[] }> {
+  try {
+    const result = await firecrawlInteractCode({
+      scrapeId,
+      code: `
+        const inputs = await page.$$eval('input', (els) => {
+          return els.slice(0, 80).map((el) => {
+            const i = el;
+            const type = (i.getAttribute('type') || 'text').toLowerCase();
+            const style = window.getComputedStyle(i);
+            const visible =
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              (i.offsetWidth > 0 || i.offsetHeight > 0);
+            if (!visible) return null;
+            return {
+              type,
+              name: i.getAttribute('name'),
+              id: i.getAttribute('id'),
+              required: i.hasAttribute('required') || i.getAttribute('aria-required') === 'true',
+              autocomplete: i.getAttribute('autocomplete'),
+              placeholder: i.getAttribute('placeholder'),
+              ariaLabel: i.getAttribute('aria-label'),
+              valueLength: (i.value || '').length
+            };
+          }).filter(Boolean);
+        });
+        JSON.stringify({ inputs });
+      `,
+    });
+    const raw = result.result ?? result.stdout ?? "";
+    const parsed = JSON.parse(raw) as { inputs?: FormInputState[] };
+    return { inputs: Array.isArray(parsed.inputs) ? parsed.inputs : [] };
+  } catch {
+    return { inputs: [] };
+  }
+}
+
 export async function runOnboardingFlow(params: {
   signupUrl: string;
   persona: TestPersona;
@@ -225,6 +351,7 @@ export async function runOnboardingFlow(params: {
     url: params.signupUrl,
     mobile: false,
     viewport: { width: 1440, height: 900 },
+    takeScreenshot: false,
   });
 
   const scrapeId = initial.scrapeId;
@@ -237,8 +364,10 @@ export async function runOnboardingFlow(params: {
   }
 
   const recentHashes: string[] = [];
-  const previousActions: Array<{ action: string; reason: string }> = [];
+  const previousActions: Array<{ action: string; instruction: string; reason: string }> = [];
   let consecutiveFailures = 0;
+  let recoveryAttempts = 0;
+  const recentActionKeys: string[] = [];
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -254,39 +383,110 @@ export async function runOnboardingFlow(params: {
       // 2. Capture viewport screenshot -- separate call, small payload.
       const screenshotBytes = await captureScreenshot(scrapeId);
 
-      // 3. Simplify DOM for Claude.
-      const simplified = simplifyDom(pageInfo.html);
-      const simplifiedJson = JSON.stringify(simplified, null, 0);
+      // 3. Capture lightweight form state (helps with password fields).
+      const formState = await captureFormState(scrapeId);
 
-      // 4. Stuck loop detection.
+      // 4. Simplify DOM for Claude.
+      const simplified = simplifyDom(pageInfo.html);
+      const simplifiedJson = JSON.stringify({ elements: simplified, form: formState }, null, 0);
+
+      // 5. If a password field exists and appears empty, proactively fill it.
+      const hasPassword = formState.inputs.some((i) => i.type === "password");
+      const emptyPassword = formState.inputs.some((i) => i.type === "password" && i.valueLength === 0);
+      const recentlyTriedPassword = previousActions
+        .slice(-3)
+        .some((a) => (a.instruction || "").toLowerCase().includes("password"));
+
+      if (hasPassword && emptyPassword && !recentlyTriedPassword) {
+        const stepStart = Date.now();
+        try {
+          const { output } = await firecrawlInteract({
+            scrapeId,
+            prompt: `Type "${params.persona.password}" into the Password field. If there is a Confirm Password field, type the same password there too.`,
+          });
+          steps.push({
+            stepIdx: step,
+            url: pageInfo.url,
+            actionType: "fill",
+            actionDetail: { instruction: "Auto-fill password", output },
+            durationMs: Date.now() - stepStart,
+            screenshotBytes,
+            blockedReason: null,
+          });
+          previousActions.push({
+            action: "fill",
+            instruction: "Auto-fill password",
+            reason: "Detected empty password field; filled deterministically",
+          });
+          continue;
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : "Password fill failed";
+          steps.push({
+            stepIdx: step,
+            url: pageInfo.url,
+            actionType: "fill",
+            actionDetail: { instruction: "Auto-fill password", error: errMsg },
+            durationMs: Date.now() - stepStart,
+            screenshotBytes,
+            blockedReason: null,
+          });
+          previousActions.push({
+            action: "fill",
+            instruction: "Auto-fill password",
+            reason: `Password autofill failed: ${errMsg}`,
+          });
+          // fall through to Claude decision
+        }
+      }
+
+      // 6. Stuck loop detection.
       const hash = domHash(pageInfo.html || "empty");
       recentHashes.push(hash);
       if (recentHashes.length > 3) recentHashes.shift();
-      if (recentHashes.length >= 3 && recentHashes.every((h) => h === recentHashes[0])) {
-        steps.push({
-          stepIdx: step,
-          url: pageInfo.url,
-          actionType: "blocked",
-          actionDetail: { reason: "Stuck loop: same page 3 times in a row" },
-          durationMs: Date.now() - startTime,
-          screenshotBytes,
-          blockedReason: "stuck_loop",
-        });
-        finalStatus = "stuck";
-        blockedReason = "Stuck loop: same page content 3 times in a row";
-        break;
-      }
 
-      // 5. Ask Claude what to do next.
+      // 7. Ask Claude what to do next.
       const stepStart = Date.now();
-      const decision = await askClaude({
+      let decision = await askClaude({
         persona: params.persona,
         screenshotBytes,
         simplifiedDom: simplifiedJson,
         previousSteps: previousActions,
       });
 
-      previousActions.push({ action: decision.action, reason: decision.reason });
+      previousActions.push({
+        action: decision.action,
+        instruction: decision.instruction,
+        reason: decision.reason,
+      });
+
+      const actionKey = `${decision.action}|${decision.instruction}`.slice(0, 300);
+      recentActionKeys.push(actionKey);
+      if (recentActionKeys.length > 3) recentActionKeys.shift();
+
+      // If we appear to be stuck (same DOM + repeated action),
+      // ask Claude to "step back" and choose a different unblocker action.
+      if (
+        recentHashes.length >= 3 &&
+        recentHashes.every((h) => h === recentHashes[0]) &&
+        recentActionKeys.length >= 2 &&
+        recentActionKeys[recentActionKeys.length - 1] === recentActionKeys[recentActionKeys.length - 2] &&
+        recoveryAttempts < 2
+      ) {
+        recoveryAttempts++;
+        const recovery = await askClaudeRecovery({
+          persona: params.persona,
+          screenshotBytes,
+          simplifiedDom: simplifiedJson,
+          previousSteps: previousActions,
+          stuckReason: "Same page content and repeated action without progress",
+        });
+        decision = recovery;
+        previousActions.push({
+          action: decision.action,
+          instruction: decision.instruction,
+          reason: `RECOVERY: ${decision.reason}`,
+        });
+      }
 
       // --- Terminal actions ---
 
@@ -384,8 +584,17 @@ export async function runOnboardingFlow(params: {
       const instruction = decision.instruction || decision.reason;
 
       try {
-        await firecrawlInteract({ scrapeId, prompt: instruction });
+        const { output } = await firecrawlInteract({ scrapeId, prompt: instruction });
         consecutiveFailures = 0;
+        steps.push({
+          stepIdx: step,
+          url: pageInfo.url,
+          actionType: decision.action as OnboardingStepAction,
+          actionDetail: { instruction, reason: decision.reason, output },
+          durationMs: Date.now() - stepStart,
+          screenshotBytes,
+          blockedReason: null,
+        });
       } catch (err) {
         consecutiveFailures++;
         const errMsg = err instanceof Error ? err.message : "Interact failed";
@@ -405,16 +614,6 @@ export async function runOnboardingFlow(params: {
         }
         continue;
       }
-
-      steps.push({
-        stepIdx: step,
-        url: pageInfo.url,
-        actionType: decision.action as OnboardingStepAction,
-        actionDetail: { instruction, reason: decision.reason },
-        durationMs: Date.now() - stepStart,
-        screenshotBytes,
-        blockedReason: null,
-      });
     }
 
     if (finalStatus === "error" && !blockedReason && steps.length >= MAX_STEPS) {

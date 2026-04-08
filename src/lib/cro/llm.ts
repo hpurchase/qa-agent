@@ -30,6 +30,44 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
   }
 }
 
+function isOauthRelated(r: CroFinding): boolean {
+  const t = `${r.title}\n${r.recommendation}\n${r.whyItMatters}`.toLowerCase();
+  return /(oauth|sso|social sign|sign in with|sign up with|continue with|google|microsoft|apple|github|okta|auth0|squarespace)/i.test(
+    t,
+  );
+}
+
+function isAddOauth(r: CroFinding): boolean {
+  const t = `${r.title}\n${r.recommendation}`.toLowerCase();
+  return /(add|introduce|include|offer).*(oauth|sso|social|google|microsoft|apple|github)/i.test(t);
+}
+
+function isRemoveOauth(r: CroFinding): boolean {
+  const t = `${r.title}\n${r.recommendation}`.toLowerCase();
+  return /(remove|delete|drop).*(oauth|sso|social|continue with|sign in with|google|microsoft|apple|github|squarespace)/i.test(t);
+}
+
+function filterContradictoryOauthRecs(params: { evidence: EvidencePack; recs: CroFinding[] }): CroFinding[] {
+  const recs = [...params.recs];
+  const oauthRecs = recs.filter(isOauthRelated);
+  if (oauthRecs.length === 0) return recs;
+
+  // If the page doesn't show any OAuth buttons in evidence, don't let the model talk about removing them.
+  const oauthButtons = params.evidence.plg.oauthButtons ?? [];
+  if (oauthButtons.length === 0) {
+    return recs.filter((r) => !(isOauthRelated(r) && isRemoveOauth(r)));
+  }
+
+  // If OAuth exists, avoid contradictory "add social login" advice.
+  const hasAdd = oauthRecs.some(isAddOauth);
+  const hasRemove = oauthRecs.some(isRemoveOauth);
+  if (hasAdd && hasRemove) {
+    return recs.filter((r) => !(isOauthRelated(r) && isAddOauth(r)));
+  }
+
+  return recs;
+}
+
 export async function inferSaaSSiteSummary(params: { evidence: EvidencePack }): Promise<SaaSSiteSummary> {
   const client = anthropicClient();
   const model = anthropicModel();
@@ -134,6 +172,11 @@ export async function generateGroundedRecommendations(params: {
       "6. Consider the site's context. If this is a pre-launch/waitlist site, don't recommend 'add a free trial' — recommend how to improve the waitlist conversion.",
       "7. Each recommendation should be something a designer/developer can implement in under a day.",
       "8. For the 'howToTest' field, describe a specific A/B test with clear success metrics.",
+      "9. OAuth / social signup guidance must be consistent and evidence-based:",
+      "- Only mention OAuth/social buttons if you can quote their exact button text in evidence.what_i_found (e.g. \"Continue with Google\").",
+      "- Never recommend both 'add social signup' and 'remove an OAuth option' in the same audit.",
+      "- If OAuth exists, only recommend removing/de-emphasising it if you identify a concrete problem (e.g. dominates the layout, unclear primary path) and you quote what you saw.",
+      "- If OAuth does NOT exist, do not recommend adding it unless you can justify why it reduces friction for this ICP and you still keep email signup as the primary path.",
       "",
       "WHAT TO LOOK FOR (from screenshots + evidence):",
       "- Is the value proposition clear within 5 seconds?",
@@ -164,5 +207,9 @@ export async function generateGroundedRecommendations(params: {
 
   const text = msg.content?.find((c) => c.type === "text")?.text ?? "";
   const parsed = safeJsonParse<{ recommendations: CroFinding[] }>(text, { recommendations: [] });
-  return { recommendations: parsed.recommendations ?? [] };
+  const filtered = filterContradictoryOauthRecs({
+    evidence: params.evidence,
+    recs: parsed.recommendations ?? [],
+  });
+  return { recommendations: filtered };
 }

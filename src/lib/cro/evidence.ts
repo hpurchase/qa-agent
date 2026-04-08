@@ -35,6 +35,7 @@ export type EvidencePack = {
     mentionsFreeForever: boolean;
     mentionsCancelAnytime: boolean;
     signupLinkHrefs: string[];
+    oauthButtons: string[];
     demoOnlyCues: boolean;
   };
 };
@@ -53,7 +54,11 @@ const CTA_VERBS = [
   "schedule",
   "join",
   "create",
+  "continue",
 ];
+
+const OAUTH_BUTTON_RE =
+  /(continue with|sign in with|sign up with|log in with|google|microsoft|apple|github|gitlab|squarespace|okta|auth0)/i;
 
 function textOf(el: cheerio.Cheerio<AnyNode>): string {
   return el.text().replace(/\s+/g, " ").trim();
@@ -94,6 +99,7 @@ export function buildEvidencePack(params: { html: string; baseUrl: string }): Ev
     .slice(0, 50);
 
   const ctas: EvidencePack["ctas"] = [];
+  const oauthButtons: string[] = [];
 
   $("a, button").each((_, el) => {
     const $el = $(el);
@@ -101,6 +107,9 @@ export function buildEvidencePack(params: { html: string; baseUrl: string }): Ev
     if (!label) return;
 
     const lower = label.toLowerCase();
+    if (OAUTH_BUTTON_RE.test(label) && label.length <= 80) {
+      oauthButtons.push(label);
+    }
     const looksLikeCTA = CTA_VERBS.some((v) => lower.includes(v));
     const isButtonish =
       el.tagName === "button" ||
@@ -198,6 +207,7 @@ export function buildEvidencePack(params: { html: string; baseUrl: string }): Ev
       mentionsFreeForever: /free forever/.test(pageText),
       mentionsCancelAnytime: /cancel anytime/.test(pageText),
       signupLinkHrefs: Array.from(new Set(signupLinks)).slice(0, 20),
+      oauthButtons: Array.from(new Set(oauthButtons)).slice(0, 20),
       demoOnlyCues,
     },
   };

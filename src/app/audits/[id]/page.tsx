@@ -175,6 +175,15 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
   const obFinalStatus = (onboardingSummary?.finalStatus as string) ?? onboardingStatus;
   const obBlockedReason = (onboardingSummary?.blockedReason as string) ?? null;
   const obRecommendations = (onboardingSummary?.recommendations as Array<Record<string, unknown>>) ?? [];
+  const obErrorText =
+    (onboardingSummary?.error as string) ||
+    (typeof (onboardingSummary as Record<string, unknown> | null)?.message === "string"
+      ? String((onboardingSummary as Record<string, unknown>).message)
+      : null);
+  const lastObStep = onboardingSteps.length > 0 ? onboardingSteps[onboardingSteps.length - 1] : null;
+  const lastObDetail = (lastObStep?.action_detail ?? {}) as Record<string, string | undefined>;
+  const lastObInstruction = lastObDetail.instruction ? String(lastObDetail.instruction) : null;
+  const lastObStepError = lastObDetail.error ? String(lastObDetail.error) : null;
 
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
@@ -479,6 +488,24 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
               </div>
             </div>
 
+            {/* Always-visible error details (copy/paste for debugging) */}
+            {(obFinalStatus === "blocked" || onboardingFailed) && (obBlockedReason || obErrorText || lastObStepError || lastObInstruction) && (
+              <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/30">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">Onboarding error details</p>
+                  <p className="text-[11px] text-zinc-400">Copy/paste this whole block</p>
+                </div>
+                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-lg bg-white px-3 py-2 text-[11px] leading-relaxed text-zinc-700 dark:bg-zinc-950 dark:text-zinc-200">
+{`finalStatus: ${String(obFinalStatus)}
+blockedReason: ${obBlockedReason ? String(obBlockedReason) : "—"}
+error: ${obErrorText ? String(obErrorText) : "—"}
+lastStep: ${lastObStep ? `${lastObStep.step_idx + 1} (${String(lastObStep.action_type)})` : "—"}
+lastInstruction: ${lastObInstruction ? lastObInstruction : "—"}
+lastStepError: ${lastObStepError ? lastObStepError : "—"}`}
+                </pre>
+              </div>
+            )}
+
             {/* Friction flags */}
             {obFriction.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
@@ -520,7 +547,7 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
                         <div className="flex-1 min-w-0">
                           <span className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
                             {step.action_type === "fill"
-                              ? `Fill: ${(detail.value as string)?.slice(0, 30) ?? "..."}`
+                              ? `Fill: ${String(detail.instruction ?? "field").slice(0, 60)}`
                               : step.action_type === "click"
                                 ? `Click: ${String(detail.reason ?? "button").slice(0, 50)}`
                                 : step.action_type === "select"

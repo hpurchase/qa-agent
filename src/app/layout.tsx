@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SaaS CRO Audit",
-  description: "PLG-focused conversion rate audit for SaaS landing pages",
+  title: "SaaS Growth Audit",
+  description:
+    "AI-powered CRO audit plus onboarding flow mapping for SaaS (screenshots, step count, time-to-value, and specific fixes).",
 };
 
 export default function RootLayout({
