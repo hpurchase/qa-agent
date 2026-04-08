@@ -20,6 +20,19 @@ function stagePatch(stage: string) {
 export async function runSingleUrlCaptureV2(params: { auditRunId: string; url: string }) {
   const bucket = requiredEnv("AUDIT_ARTIFACTS_BUCKET", "audit-artifacts");
 
+  function normalizeImageMediaType(v: string): "image/jpeg" | "image/png" | "image/gif" | "image/webp" {
+    const t = v.split(";")[0]?.trim().toLowerCase();
+    if (t === "image/jpeg" || t === "image/png" || t === "image/gif" || t === "image/webp") return t;
+    return "image/jpeg";
+  }
+
+  function extFor(mt: string) {
+    if (mt === "image/png") return "png";
+    if (mt === "image/gif") return "gif";
+    if (mt === "image/webp") return "webp";
+    return "jpg";
+  }
+
   // Stage: capture
   await updateAuditRun({
     id: params.auditRunId,
@@ -84,35 +97,41 @@ export async function runSingleUrlCaptureV2(params: { auditRunId: string; url: s
 
   let desktopShotBytes: ArrayBuffer | null = null;
   let mobileShotBytes: ArrayBuffer | null = null;
+  let desktopShotMediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" | null = null;
+  let mobileShotMediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" | null = null;
 
   if (hasCapture) {
     const d = await downloadAuditArtifact({ bucket, path: existingDesktopPath! });
     const m = await downloadAuditArtifact({ bucket, path: existingMobilePath! });
     desktopShotBytes = d.bytes;
     mobileShotBytes = m.bytes;
+    desktopShotMediaType = normalizeImageMediaType(d.contentType);
+    mobileShotMediaType = normalizeImageMediaType(m.contentType);
   } else {
     if (desktop.screenshotUrl) {
       const { bytes, contentType } = await downloadBytes(desktop.screenshotUrl);
       desktopShotBytes = bytes;
-      const storagePath = `audits/${params.auditRunId}/desktop.webp`;
+      desktopShotMediaType = normalizeImageMediaType(contentType);
+      const storagePath = `audits/${params.auditRunId}/desktop.${extFor(desktopShotMediaType)}`;
       await uploadAuditArtifact({ bucket, path: storagePath, bytes, contentType });
       await insertArtifact({
         auditRunId: params.auditRunId,
         kind: "screenshot_desktop",
         storagePath,
-        meta: { source: "firecrawl", fullPage: true, viewport: { width: 1440, height: 900 } },
+        meta: { source: "firecrawl", fullPage: true, contentType, viewport: { width: 1440, height: 900 } },
       });
     }
     if (mobile.screenshotUrl) {
       const { bytes, contentType } = await downloadBytes(mobile.screenshotUrl);
       mobileShotBytes = bytes;
-      const storagePath = `audits/${params.auditRunId}/mobile.webp`;
+      mobileShotMediaType = normalizeImageMediaType(contentType);
+      const storagePath = `audits/${params.auditRunId}/mobile.${extFor(mobileShotMediaType)}`;
       await uploadAuditArtifact({ bucket, path: storagePath, bytes, contentType });
       await insertArtifact({
         auditRunId: params.auditRunId,
         kind: "screenshot_mobile",
         storagePath,
-        meta: { source: "firecrawl", fullPage: true, viewport: { width: 390, height: 844 } },
+        meta: { source: "firecrawl", fullPage: true, contentType, viewport: { width: 390, height: 844 } },
       });
     }
   }
@@ -182,8 +201,14 @@ export async function runSingleUrlCaptureV2(params: { auditRunId: string; url: s
       evidence,
       siteSummary,
       screenshots: {
-        desktop: desktopShotBytes ? { bytes: desktopShotBytes, mediaType: "image/webp" } : undefined,
-        mobile: mobileShotBytes ? { bytes: mobileShotBytes, mediaType: "image/webp" } : undefined,
+        desktop:
+          desktopShotBytes && desktopShotMediaType
+            ? { bytes: desktopShotBytes, mediaType: desktopShotMediaType }
+            : undefined,
+        mobile:
+          mobileShotBytes && mobileShotMediaType
+            ? { bytes: mobileShotBytes, mediaType: mobileShotMediaType }
+            : undefined,
       },
     });
 
