@@ -15,11 +15,36 @@ export type TestPersona = {
 };
 
 function generatePassword(): string {
-  const chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$";
-  const bytes = crypto.randomBytes(20);
-  return Array.from(bytes)
-    .map((b) => chars[b % chars.length])
-    .join("");
+  // Meet common SaaS password rules deterministically:
+  // - at least 12 chars
+  // - includes lowercase, uppercase, number, and symbol
+  const lower = "abcdefghijkmnpqrstuvwxyz";
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const digits = "23456789";
+  const symbols = "!@#$";
+  const all = lower + upper + digits + symbols;
+
+  const length = 16;
+  const bytes = crypto.randomBytes(length);
+
+  const out: string[] = [];
+  // Ensure required character classes exist.
+  out.push(lower[bytes[0] % lower.length]!);
+  out.push(upper[bytes[1] % upper.length]!);
+  out.push(digits[bytes[2] % digits.length]!);
+  out.push(symbols[bytes[3] % symbols.length]!);
+
+  for (let i = 4; i < length; i++) {
+    out.push(all[bytes[i] % all.length]!);
+  }
+
+  // Shuffle to avoid predictable prefix.
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = bytes[i] % (i + 1);
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+
+  return out.join("");
 }
 
 export function buildTestPersona(runId: string): TestPersona {

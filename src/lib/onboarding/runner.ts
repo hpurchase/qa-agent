@@ -299,7 +299,15 @@ type FormInputState = {
   valueLength: number;
 };
 
-async function captureFormState(scrapeId: string): Promise<{ inputs: FormInputState[] }> {
+type PasswordState = {
+  count: number;
+  anyEmpty: boolean;
+  allEqual: boolean;
+};
+
+async function captureFormState(
+  scrapeId: string,
+): Promise<{ inputs: FormInputState[]; password: PasswordState }> {
   try {
     const result = await firecrawlInteractCode({
       scrapeId,
@@ -326,14 +334,65 @@ async function captureFormState(scrapeId: string): Promise<{ inputs: FormInputSt
             };
           }).filter(Boolean);
         });
-        JSON.stringify({ inputs });
+        const pwValues = inputs
+          .filter((i) => i.type === 'password')
+          .map((i) => i.valueLength);
+        // We can't return the actual password values (sensitive), but we can detect "empty" and
+        // whether all password fields appear consistent by comparing DOM input values internally.
+        const pwDomValues = Array.from(document.querySelectorAll('input[type="password"]'))
+          .map((el) => (el && (el).value) || '')
+          .filter((v) => v !== null);
+        const pwCount = pwDomValues.length;
+        const anyEmpty = pwDomValues.some((v) => !v || v.length === 0);
+        const allEqual = pwDomValues.every((v) => v === pwDomValues[0]);
+        JSON.stringify({ inputs, password: { count: pwCount, anyEmpty, allEqual } });
       `,
     });
     const raw = result.result ?? result.stdout ?? "";
-    const parsed = JSON.parse(raw) as { inputs?: FormInputState[] };
-    return { inputs: Array.isArray(parsed.inputs) ? parsed.inputs : [] };
+    const parsed = JSON.parse(raw) as { inputs?: FormInputState[]; password?: PasswordState };
+    return {
+      inputs: Array.isArray(parsed.inputs) ? parsed.inputs : [],
+      password: {
+        count: Number(parsed.password?.count ?? 0),
+        anyEmpty: Boolean(parsed.password?.anyEmpty ?? false),
+        allEqual: Boolean(parsed.password?.allEqual ?? true),
+      },
+    };
   } catch {
-    return { inputs: [] };
+    return { inputs: [], password: { count: 0, anyEmpty: false, allEqual: true } };
+  }
+}
+
+async function fillAllVisiblePasswordInputs(params: {
+  scrapeId: string;
+  password: string;
+}): Promise<{ ok: boolean; filledCount: number }> {
+  try {
+    const result = await firecrawlInteractCode({
+      scrapeId: params.scrapeId,
+      code: `
+        const pw = ${JSON.stringify(params.password)};
+        const handles = await page.$$('input[type="password"]');
+        let filled = 0;
+        for (const h of handles) {
+          const box = await h.boundingBox();
+          if (!box || box.width < 2 || box.height < 2) continue;
+          try {
+            await h.scrollIntoViewIfNeeded();
+          } catch {}
+          try {
+            await h.fill(pw);
+            filled++;
+          } catch {}
+        }
+        JSON.stringify({ ok: true, filledCount: filled });
+      `,
+    });
+    const raw = result.result ?? result.stdout ?? "";
+    const parsed = JSON.parse(raw) as { ok?: boolean; filledCount?: number };
+    return { ok: Boolean(parsed.ok), filledCount: Number(parsed.filledCount ?? 0) };
+  } catch {
+    return { ok: false, filledCount: 0 };
   }
 }
 
@@ -391,19 +450,25 @@ export async function runOnboardingFlow(params: {
       const simplifiedJson = JSON.stringify({ elements: simplified, form: formState }, null, 0);
 
       // 5. If a password field exists and appears empty, proactively fill it.
-      const hasPassword = formState.inputs.some((i) => i.type === "password");
-      const emptyPassword = formState.inputs.some((i) => i.type === "password" && i.valueLength === 0);
+      const hasPassword = formState.inputs.some((i) => i.type === "password") || formState.password.count > 0;
+      const emptyPassword =
+        formState.inputs.some((i) => i.type === "password" && i.valueLength === 0) || formState.password.anyEmpty;
       const recentlyTriedPassword = previousActions
         .slice(-3)
         .some((a) => (a.instruction || "").toLowerCase().includes("password"));
 
-      if (hasPassword && emptyPassword && !recentlyTriedPassword) {
+      // If there are multiple password fields (confirm password), ensure they match.
+      const needsPasswordSync = formState.password.count >= 2 && (!formState.password.allEqual || formState.password.anyEmpty);
+
+      if (hasPassword && (emptyPassword || needsPasswordSync) && !recentlyTriedPassword) {
         const stepStart = Date.now();
         try {
-          const { output } = await firecrawlInteract({
-            scrapeId,
-            prompt: `Type "${params.persona.password}" into the Password field. If there is a Confirm Password field, type the same password there too.`,
-          });
+          // Use deterministic code fill so password + confirm can't diverge.
+          const filled = await fillAllVisiblePasswordInputs({ scrapeId, password: params.persona.password });
+          const output =
+            filled.ok
+              ? `Filled ${filled.filledCount} password input(s) via code.`
+              : "Attempted to fill password inputs via code, but it may not have applied.";
           steps.push({
             stepIdx: step,
             url: pageInfo.url,
