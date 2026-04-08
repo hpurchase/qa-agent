@@ -37,6 +37,7 @@ export async function updateAuditRun(params: {
 
 export async function insertArtifact(params: {
   auditRunId: string;
+  auditTargetId?: string | null;
   kind: AuditArtifactKind;
   storagePath?: string | null;
   content?: string | null;
@@ -45,6 +46,7 @@ export async function insertArtifact(params: {
   const sb = supabaseAdmin();
   const { error } = await sb.from("audit_artifacts").insert({
     audit_run_id: params.auditRunId,
+    audit_target_id: params.auditTargetId ?? null,
     kind: params.kind,
     storage_path: params.storagePath ?? null,
     content: params.content ?? null,
@@ -55,6 +57,7 @@ export async function insertArtifact(params: {
 
 export async function insertFinding(params: {
   auditRunId: string;
+  auditTargetId?: string | null;
   source: AuditFindingSource;
   summary: string;
   findingsJson: unknown;
@@ -63,6 +66,7 @@ export async function insertFinding(params: {
   const sb = supabaseAdmin();
   const { error } = await sb.from("audit_findings").insert({
     audit_run_id: params.auditRunId,
+    audit_target_id: params.auditTargetId ?? null,
     source: params.source,
     summary: params.summary,
     findings_json: params.findingsJson,
@@ -70,4 +74,3 @@ export async function insertFinding(params: {
   });
   if (error) throw error;
 }
-

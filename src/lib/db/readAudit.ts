@@ -14,6 +14,7 @@ export type AuditRunRow = {
 export type AuditArtifactRow = {
   id: string;
   audit_run_id: string;
+  audit_target_id: string | null;
   kind: string;
   storage_path: string | null;
   content: string | null;
@@ -24,6 +25,7 @@ export type AuditArtifactRow = {
 export type AuditFindingRow = {
   id: string;
   audit_run_id: string;
+  audit_target_id: string | null;
   source: string;
   summary: string;
   findings_json: unknown;
@@ -31,11 +33,34 @@ export type AuditFindingRow = {
   created_at: string;
 };
 
+export type AuditTargetRow = {
+  id: string;
+  audit_run_id: string;
+  role: string;
+  url: string;
+  normalized_url: string;
+  status: string;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export async function getAuditRun(id: string): Promise<AuditRunRow | null> {
   const sb = supabaseAdmin();
   const { data, error } = await sb.from("audit_runs").select("*").eq("id", id).maybeSingle();
   if (error) throw error;
   return (data as AuditRunRow) ?? null;
+}
+
+export async function listAuditTargets(auditRunId: string): Promise<AuditTargetRow[]> {
+  const sb = supabaseAdmin();
+  const { data, error } = await sb
+    .from("audit_targets")
+    .select("*")
+    .eq("audit_run_id", auditRunId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data as AuditTargetRow[]) ?? [];
 }
 
 export async function listArtifacts(auditRunId: string): Promise<AuditArtifactRow[]> {
@@ -59,4 +84,3 @@ export async function listFindings(auditRunId: string): Promise<AuditFindingRow[
   if (error) throw error;
   return (data as AuditFindingRow[]) ?? [];
 }
-

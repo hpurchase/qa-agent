@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { claimNextAuditJob, updateAuditJob } from "@/lib/db/auditJobs";
 import { getAuditRun } from "@/lib/db/readAudit";
 import { updateAuditRun } from "@/lib/db/auditRuns";
-import { runSingleUrlCaptureV2 } from "@/lib/audit/runAuditV2";
+import { runMultiPageAudit } from "@/lib/audit/runAuditV3";
 
 export const maxDuration = 300;
 
@@ -41,7 +41,7 @@ async function runWorker(req: Request) {
       if (!run) throw new Error("Missing audit run");
 
       await updateAuditRun({ id: run.id, status: "running", error: null });
-      await runSingleUrlCaptureV2({ auditRunId: run.id, url: run.normalized_url });
+      await runMultiPageAudit({ auditRunId: run.id, url: run.normalized_url });
       await updateAuditJob({ id: job.id, status: "done", error: null });
       await updateAuditRun({ id: run.id, status: "done" });
       results.push({ jobId: job.id, auditRunId: run.id, status: "done" });

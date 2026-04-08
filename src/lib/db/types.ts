@@ -7,6 +7,6 @@ export type AuditArtifactKind =
   | "pricing_html"
   | "pricing_markdown";
 export type AuditFindingSource = "heuristic" | "llm";
-
 export type AuditJobStatus = "queued" | "running" | "done" | "failed";
-
+export type AuditTargetRole = "homepage" | "pricing" | "signup" | "unknown";
+export type AuditTargetStatus = "queued" | "running" | "done" | "failed" | "skipped";
