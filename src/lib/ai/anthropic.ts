@@ -11,6 +11,6 @@ export function anthropicClient() {
 }
 
 export function anthropicModel() {
-  return process.env.ANTHROPIC_MODEL ?? "claude-3-5-sonnet-latest";
+  return process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-20250514";
 }
 

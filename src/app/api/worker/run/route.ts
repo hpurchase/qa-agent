@@ -48,9 +48,17 @@ async function runWorker(req: Request) {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       const attempts = job.attempts ?? 1;
-      const maxAttempts = 3;
+      const isFirecrawl = message.includes("Firecrawl error");
+      const isAnthropic = message.toLowerCase().includes("anthropic") || message.includes("not_found_error") || message.includes("request_id");
+      const isNonRetriableModel = message.includes("not_found_error") && message.includes("model:");
 
-      if (attempts < maxAttempts) {
+      // Policy:
+      // - Firecrawl failures: do NOT retry automatically (wastes credits).
+      // - Claude/Anthropic failures: retry up to 2 times.
+      // - Non-retriable model errors: fail immediately.
+      const maxAttempts = isFirecrawl ? 1 : isAnthropic ? 2 : 3;
+
+      if (!isNonRetriableModel && attempts < maxAttempts) {
         const delayMs = Math.min(15 * 60_000, 30_000 * Math.pow(2, attempts - 1));
         await updateAuditJob({
           id: job.id,
