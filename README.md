@@ -55,14 +55,19 @@ Add these in **Vercel → Project Settings → Environment Variables**:
 - `WORKER_TOKEN`
 
 ### Cron worker (Vercel Cron)
-Create a Vercel Cron job that calls the worker endpoint on a schedule (e.g. every 1–5 minutes):
+Cron is defined via `vercel.json` in this repo and will be created on production deploy.
 
+Add a secret in Vercel:
+- `CRON_SECRET` (random long secret)
+
+Vercel will call the worker endpoint on the schedule and include:
+- `Authorization: Bearer $CRON_SECRET`
+
+For manual debugging, you can also call it yourself using `x-worker-token` if `WORKER_TOKEN` is set.
+
+The worker endpoint is:
 - **Method**: `POST`
 - **Path**: `/api/worker/run`
-- **Headers**:
-  - `x-worker-token`: set to your `WORKER_TOKEN`
-  - `x-worker-id`: `vercel-cron` (optional)
-  - `x-max-jobs`: `3` (optional)
 
 This design avoids running long jobs inside `POST /api/audits`, which is not reliable on serverless.\n+
 ## Notes

@@ -4,20 +4,26 @@ import { getAuditRun } from "@/lib/db/readAudit";
 import { updateAuditRun } from "@/lib/db/auditRuns";
 import { runSingleUrlCaptureV2 } from "@/lib/audit/runAuditV2";
 
-function requiredEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing environment variable: ${name}`);
-  return v;
-}
-
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export async function POST(req: Request) {
-  const token = requiredEnv("WORKER_TOKEN");
+function isAuthorized(req: Request): boolean {
+  // Preferred for Vercel Cron: Authorization: Bearer <CRON_SECRET>
+  const cronSecret = process.env.CRON_SECRET;
+  const auth = req.headers.get("authorization");
+  if (cronSecret && auth === `Bearer ${cronSecret}`) return true;
+
+  // Fallback for manual runs: x-worker-token: <WORKER_TOKEN>
+  const workerToken = process.env.WORKER_TOKEN;
   const got = req.headers.get("x-worker-token");
-  if (!got || got !== token) {
+  if (workerToken && got === workerToken) return true;
+
+  return false;
+}
+
+export async function POST(req: Request) {
+  if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
