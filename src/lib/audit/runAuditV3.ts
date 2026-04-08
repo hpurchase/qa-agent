@@ -39,6 +39,27 @@ function extFor(mt: string) {
   return "jpg";
 }
 
+async function preflightUrlExists(url: string): Promise<boolean> {
+  // Prevent wasting Firecrawl credits on URLs that 404 / are blocked.
+  // Redirects are considered "exists" (very common for auth/signup flows).
+  try {
+    const head = await fetch(url, { method: "HEAD", redirect: "manual" });
+    if (head.status > 0 && head.status < 400) return true;
+    if (head.status === 405 || head.status === 403 || head.status === 0) {
+      const get = await fetch(url, { method: "GET", redirect: "manual" });
+      return get.status > 0 && get.status < 400;
+    }
+    return false;
+  } catch {
+    try {
+      const get = await fetch(url, { method: "GET", redirect: "manual" });
+      return get.status > 0 && get.status < 400;
+    } catch {
+      return false;
+    }
+  }
+}
+
 async function resizeForVision(bytes: ArrayBuffer): Promise<{ bytes: ArrayBuffer; mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" }> {
   const img = sharp(Buffer.from(bytes));
   const meta = await img.metadata();
@@ -141,6 +162,13 @@ async function captureTarget(params: {
   const existingDesktopPath = byKind.get("screenshot_desktop")?.storage_path ?? null;
   const existingMobilePath = byKind.get("screenshot_mobile")?.storage_path ?? null;
   const hasCapture = Boolean(existingHtml && existingDesktopPath && existingMobilePath);
+
+  if (!hasCapture) {
+    const ok = await preflightUrlExists(params.url);
+    if (!ok) {
+      throw new Error(`Preflight failed: URL not reachable (status >= 400) ${params.url}`);
+    }
+  }
 
   const desktop = hasCapture
     ? { html: existingHtml!, markdown: "", screenshotUrl: null as string | null, scrapeId: null as string | null }
@@ -322,6 +350,49 @@ export async function runMultiPageAudit(params: { auditRunId: string; url: strin
       baseUrl: params.url,
       evidence,
       homepageScrapeId: homepageScrape.scrapeId,
+    });
+
+    if (discovery.pricing) {
+      await insertAuditTarget({
+        auditRunId: params.auditRunId,
+        role: "pricing",
+        url: discovery.pricing.url,
+        normalizedUrl: discovery.pricing.url,
+      });
+    }
+    if (discovery.signup) {
+      await insertAuditTarget({
+        auditRunId: params.auditRunId,
+        role: "signup",
+        url: discovery.signup.url,
+        normalizedUrl: discovery.signup.url,
+      });
+    }
+
+    targets = await listAuditTargets(params.auditRunId);
+  }
+
+  // If the previous run ended up with only a homepage target (even if it's already done),
+  // rerun discovery using the stored homepage HTML (no additional Firecrawl credits).
+  if (targets.length === 1 && targets[0]?.role === "homepage") {
+    const homepage = targets[0]!;
+    const sb = supabaseAdmin();
+    const { data: htmlRows, error: htmlErr } = await sb
+      .from("audit_artifacts")
+      .select("content")
+      .eq("audit_target_id", homepage.id)
+      .eq("kind", "html")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (htmlErr) throw htmlErr;
+
+    const html = ((htmlRows as Array<{ content: string | null }> | null)?.[0]?.content) ?? "";
+    const evidence = buildEvidencePack({ html, baseUrl: homepage.url });
+
+    const discovery = await discoverTargets({
+      baseUrl: homepage.url,
+      evidence,
+      homepageScrapeId: null,
     });
 
     if (discovery.pricing) {

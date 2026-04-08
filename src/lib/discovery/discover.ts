@@ -16,11 +16,24 @@ export type DiscoveryResult = {
 const SIGNUP_PROBE_PATHS = ["/signup", "/sign-up", "/register", "/login", "/start"];
 
 async function probeUrl(url: string): Promise<boolean> {
+  // Some apps reject HEAD (405) or redirect (302) before landing on HTML.
+  // We treat any <400 response as "exists" and prefer GET as a fallback.
   try {
-    const res = await fetch(url, { method: "HEAD", redirect: "follow" });
-    return res.ok;
-  } catch {
+    const head = await fetch(url, { method: "HEAD", redirect: "manual" });
+    if (head.status > 0 && head.status < 400) return true;
+    // If HEAD isn't allowed (or otherwise inconclusive), try a lightweight GET.
+    if (head.status === 405 || head.status === 403 || head.status === 0) {
+      const get = await fetch(url, { method: "GET", redirect: "manual" });
+      return get.status > 0 && get.status < 400;
+    }
     return false;
+  } catch {
+    try {
+      const get = await fetch(url, { method: "GET", redirect: "manual" });
+      return get.status > 0 && get.status < 400;
+    } catch {
+      return false;
+    }
   }
 }
 
