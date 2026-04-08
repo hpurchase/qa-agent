@@ -49,8 +49,12 @@ export async function runSingleUrlCaptureV2(params: { auditRunId: string; url: s
     meta: { source: "firecrawl", variant: "desktop" },
   });
 
+  let desktopShotBytes: ArrayBuffer | null = null;
+  let mobileShotBytes: ArrayBuffer | null = null;
+
   if (desktop.screenshotUrl) {
     const { bytes, contentType } = await downloadBytes(desktop.screenshotUrl);
+    desktopShotBytes = bytes;
     const storagePath = `audits/${params.auditRunId}/desktop.webp`;
     await uploadAuditArtifact({ bucket, path: storagePath, bytes, contentType });
     await insertArtifact({
@@ -62,6 +66,7 @@ export async function runSingleUrlCaptureV2(params: { auditRunId: string; url: s
   }
   if (mobile.screenshotUrl) {
     const { bytes, contentType } = await downloadBytes(mobile.screenshotUrl);
+    mobileShotBytes = bytes;
     const storagePath = `audits/${params.auditRunId}/mobile.webp`;
     await uploadAuditArtifact({ bucket, path: storagePath, bytes, contentType });
     await insertArtifact({
@@ -125,15 +130,12 @@ export async function runSingleUrlCaptureV2(params: { auditRunId: string; url: s
     const siteSummary = await inferSaaSSiteSummary({ evidence });
     await updateAuditRun({ id: params.auditRunId, siteSummary: { ...siteSummary, ...stagePatch("claude") } });
 
-    const desktopShot = desktop.screenshotUrl ? await downloadBytes(desktop.screenshotUrl) : null;
-    const mobileShot = mobile.screenshotUrl ? await downloadBytes(mobile.screenshotUrl) : null;
-
     const llm = await generateGroundedRecommendations({
       evidence,
       siteSummary,
       screenshots: {
-        desktop: desktopShot ? { bytes: desktopShot.bytes, mediaType: "image/webp" } : undefined,
-        mobile: mobileShot ? { bytes: mobileShot.bytes, mediaType: "image/webp" } : undefined,
+        desktop: desktopShotBytes ? { bytes: desktopShotBytes, mediaType: "image/webp" } : undefined,
+        mobile: mobileShotBytes ? { bytes: mobileShotBytes, mediaType: "image/webp" } : undefined,
       },
     });
 
@@ -146,4 +148,3 @@ export async function runSingleUrlCaptureV2(params: { auditRunId: string; url: s
     });
   }
 }
-

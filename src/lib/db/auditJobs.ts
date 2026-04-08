@@ -25,11 +25,12 @@ export async function enqueueAuditJob(params: { auditRunId: string }) {
 
 export async function claimNextAuditJob(params: { lockedBy: string }): Promise<AuditJobRow | null> {
   const sb = supabaseAdmin();
-  const { data, error } = await sb.rpc("claim_next_audit_job", { p_locked_by: params.lockedBy });
+  const { data, error } = await sb
+    .rpc("claim_next_audit_job", { p_locked_by: params.lockedBy })
+    .maybeSingle();
   if (error) throw error;
-  // If no job found, function returns null-ish object; normalize.
-  if (!data || typeof data !== "object" || !("id" in data)) return null;
-  return data as AuditJobRow;
+  if (!data || !(data as Record<string, unknown>).id) return null;
+  return data as unknown as AuditJobRow;
 }
 
 export async function updateAuditJob(params: {

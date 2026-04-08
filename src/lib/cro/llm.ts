@@ -11,6 +11,25 @@ export type SaaSSiteSummary = {
   plgMismatch: boolean;
 };
 
+function extractJson(raw: string): string {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) return fenced[1].trim();
+  const braceStart = raw.indexOf("{");
+  const braceEnd = raw.lastIndexOf("}");
+  if (braceStart !== -1 && braceEnd > braceStart) {
+    return raw.slice(braceStart, braceEnd + 1);
+  }
+  return raw.trim();
+}
+
+function safeJsonParse<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(extractJson(raw)) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export async function inferSaaSSiteSummary(params: { evidence: EvidencePack }): Promise<SaaSSiteSummary> {
   const client = anthropicClient();
   const model = anthropicModel();
@@ -36,7 +55,15 @@ export async function inferSaaSSiteSummary(params: { evidence: EvidencePack }): 
   });
 
   const text = msg.content?.find((c) => c.type === "text")?.text ?? "";
-  return JSON.parse(text) as SaaSSiteSummary;
+
+  const fallback: SaaSSiteSummary = {
+    conversionMotion: "signup",
+    productCategory: "unknown",
+    valueProp: "",
+    icp: "",
+    plgMismatch: false,
+  };
+  return safeJsonParse<SaaSSiteSummary>(text, fallback);
 }
 
 export async function generateGroundedRecommendations(params: {
@@ -109,13 +136,12 @@ export async function generateGroundedRecommendations(params: {
 
   const msg = await client.messages.create({
     model,
-    max_tokens: 1400,
+    max_tokens: 4096,
     temperature: 0.2,
     messages: [{ role: "user", content }],
   });
 
   const text = msg.content?.find((c) => c.type === "text")?.text ?? "";
-  const parsed = JSON.parse(text) as { recommendations: CroFinding[] };
+  const parsed = safeJsonParse<{ recommendations: CroFinding[] }>(text, { recommendations: [] });
   return { recommendations: parsed.recommendations ?? [] };
 }
-

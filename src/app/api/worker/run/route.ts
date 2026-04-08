@@ -4,17 +4,17 @@ import { getAuditRun } from "@/lib/db/readAudit";
 import { updateAuditRun } from "@/lib/db/auditRuns";
 import { runSingleUrlCaptureV2 } from "@/lib/audit/runAuditV2";
 
+export const maxDuration = 300;
+
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
 function isAuthorized(req: Request): boolean {
-  // Preferred for Vercel Cron: Authorization: Bearer <CRON_SECRET>
   const cronSecret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization");
   if (cronSecret && auth === `Bearer ${cronSecret}`) return true;
 
-  // Fallback for manual runs: x-worker-token: <WORKER_TOKEN>
   const workerToken = process.env.WORKER_TOKEN;
   const got = req.headers.get("x-worker-token");
   if (workerToken && got === workerToken) return true;
@@ -22,13 +22,13 @@ function isAuthorized(req: Request): boolean {
   return false;
 }
 
-export async function POST(req: Request) {
+async function runWorker(req: Request) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const workerId = req.headers.get("x-worker-id") ?? "vercel-cron";
-  const maxJobs = Number(req.headers.get("x-max-jobs") ?? "3");
+  const maxJobs = Number(req.headers.get("x-max-jobs") ?? "1");
 
   const results: Array<{ jobId: string; auditRunId: string; status: string; error?: string }> = [];
 
@@ -42,7 +42,8 @@ export async function POST(req: Request) {
 
       await updateAuditRun({ id: run.id, status: "running", error: null });
       await runSingleUrlCaptureV2({ auditRunId: run.id, url: run.normalized_url });
-      await updateAuditJob({ id: job.id, status: "done" });
+      await updateAuditJob({ id: job.id, status: "done", error: null });
+      await updateAuditRun({ id: run.id, status: "done" });
       results.push({ jobId: job.id, auditRunId: run.id, status: "done" });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -50,7 +51,6 @@ export async function POST(req: Request) {
       const maxAttempts = 3;
 
       if (attempts < maxAttempts) {
-        // Exponential-ish backoff.
         const delayMs = Math.min(15 * 60_000, 30_000 * Math.pow(2, attempts - 1));
         await updateAuditJob({
           id: job.id,
@@ -58,6 +58,7 @@ export async function POST(req: Request) {
           error: message,
           runAfter: new Date(Date.now() + delayMs),
         });
+        await updateAuditRun({ id: job.audit_run_id, status: "queued", error: message });
         results.push({ jobId: job.id, auditRunId: job.audit_run_id, status: "requeued", error: message });
       } else {
         await updateAuditJob({ id: job.id, status: "failed", error: message });
@@ -66,10 +67,16 @@ export async function POST(req: Request) {
       }
     }
 
-    // Tiny pause to avoid hammering DB on cron burst.
     await sleep(100);
   }
 
   return NextResponse.json({ processed: results.length, results }, { status: 200 });
 }
 
+export async function GET(req: Request) {
+  return runWorker(req);
+}
+
+export async function POST(req: Request) {
+  return runWorker(req);
+}

@@ -139,23 +139,23 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
         <div className="mt-4 flex flex-col gap-3">
           {recList.length ? (
             recList.map((r, idx) => {
-              const title = r.title.toLowerCase();
-              const bucket =
-                title.includes("pricing") ? "Pricing" : title.includes("sign") || title.includes("trial") ? "Signup" : title.includes("trust") ? "Trust" : "Messaging";
+              const titleLower = (r.title ?? "").toLowerCase();
+              const category =
+                titleLower.includes("pricing") ? "Pricing" : titleLower.includes("sign") || titleLower.includes("trial") ? "Signup" : titleLower.includes("trust") ? "Trust" : "Messaging";
               return (
               <div key={r.id || idx} className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-zinc-500 dark:text-zinc-500">{bucket}</div>
-                    <div className="font-medium text-zinc-900 dark:text-zinc-50">{r.title}</div>
+                    <div className="text-xs font-medium text-zinc-500 dark:text-zinc-500">{category}</div>
+                    <div className="font-medium text-zinc-900 dark:text-zinc-50">{r.title ?? "Recommendation"}</div>
                   </div>
                   <span className="rounded-full bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-                    {r.severity}
+                    {r.severity ?? "med"}
                   </span>
                 </div>
-                <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">{r.recommendation}</p>
-                <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{r.whyItMatters}</p>
-                <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">Test: {r.howToTest}</p>
+                {r.recommendation ? <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">{r.recommendation}</p> : null}
+                {r.whyItMatters ? <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{r.whyItMatters}</p> : null}
+                {r.howToTest ? <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">Test: {r.howToTest}</p> : null}
               </div>
             );})
           ) : (

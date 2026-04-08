@@ -1,3 +1,5 @@
+class SsrfError extends Error {}
+
 export function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   const url = trimmed.startsWith("http://") || trimmed.startsWith("https://")
@@ -54,26 +56,23 @@ export async function validatePublicHttpUrl(input: string): Promise<string> {
   }
 
   // Best-effort SSRF protection: resolve DNS and reject private addresses.
-  // If resolution fails, we still allow (some environments restrict DNS),
-  // but we keep hostname-level blocks above.
   try {
     const dns = await import("node:dns/promises");
     const results = await dns.lookup(host, { all: true, verbatim: true });
     for (const r of results) {
       if (r.family === 4 && isPrivateIpv4(r.address)) {
-        throw new Error("URL resolves to a private IP");
+        throw new SsrfError("URL resolves to a private IP");
       }
-      // IPv6: block loopback + unique local + link-local.
       if (r.family === 6) {
         const a = r.address.toLowerCase();
         if (a === "::1" || a.startsWith("fc") || a.startsWith("fd") || a.startsWith("fe80:")) {
-          throw new Error("URL resolves to a private IP");
+          throw new SsrfError("URL resolves to a private IP");
         }
       }
     }
   } catch (err) {
-    // ignore DNS lookup failures (best-effort)
-    void err;
+    if (err instanceof SsrfError) throw err;
+    // DNS lookup failure is non-fatal (some environments restrict DNS).
   }
 
   return normalized;
