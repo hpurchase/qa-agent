@@ -4,7 +4,11 @@ import { insertOnboardingStep } from "@/lib/db/onboardingSteps";
 import { uploadAuditArtifact } from "@/lib/storage";
 import { buildTestPersona } from "@/lib/onboarding/persona";
 import { runOnboardingFlow, type StepRecord } from "@/lib/onboarding/runner";
-import { computeOnboardingMetrics, generateOnboardingRecommendations } from "@/lib/cro/onboardingAnalysis";
+import {
+  computeOnboardingMetrics,
+  generateDashboardFeedback,
+  generateOnboardingRecommendations,
+} from "@/lib/cro/onboardingAnalysis";
 import sharp from "sharp";
 import type { OnboardingStatus } from "@/lib/db/types";
 
@@ -107,6 +111,7 @@ export async function runOnboardingAudit(params: { auditRunId: string; url: stri
   const metrics = computeOnboardingMetrics(result.steps);
 
   let recommendations: Array<Record<string, unknown>> = [];
+  let dashboardFeedback: Record<string, unknown> | null = null;
   if (process.env.ANTHROPIC_API_KEY && result.steps.length > 0) {
     try {
       const recs = await generateOnboardingRecommendations({
@@ -117,6 +122,16 @@ export async function runOnboardingAudit(params: { auditRunId: string; url: stri
       recommendations = recs;
     } catch {
       // Non-fatal: we still have deterministic metrics.
+    }
+
+    try {
+      const fb = await generateDashboardFeedback({
+        steps: result.steps,
+        finalStatus: result.finalStatus,
+      });
+      dashboardFeedback = fb as unknown as Record<string, unknown> | null;
+    } catch {
+      // Non-fatal.
     }
   }
 
@@ -130,6 +145,7 @@ export async function runOnboardingAudit(params: { auditRunId: string; url: stri
     estimatedTimeToValueMs: metrics.estimatedTimeToValueMs,
     frictionFlags: metrics.frictionFlags,
     recommendations,
+    dashboardFeedback,
   };
 
   const finalStatus: OnboardingStatus =

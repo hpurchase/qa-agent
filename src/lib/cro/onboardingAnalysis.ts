@@ -1,4 +1,4 @@
-import type { StepRecord } from "@/lib/onboarding/runner";
+import type { RunResult, StepRecord } from "@/lib/onboarding/runner";
 import { anthropicClient, anthropicModel } from "@/lib/ai/anthropic";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import sharp from "sharp";
@@ -10,6 +10,13 @@ export type OnboardingMetrics = {
   estimatedTimeToValueMs: number;
   formFieldCount: number;
   frictionFlags: string[];
+};
+
+export type DashboardFeedback = {
+  summary: string;
+  nextBestAction: string;
+  uiIssues: Array<{ severity: "high" | "med" | "low"; issue: string; fix: string }>;
+  activationChecklist: string[];
 };
 
 export function computeOnboardingMetrics(steps: StepRecord[]): OnboardingMetrics {
@@ -46,8 +53,8 @@ export function computeOnboardingMetrics(steps: StepRecord[]): OnboardingMetrics
 
   const hasPasswordField = fillSteps.some((s) => {
     const detail = s.actionDetail as Record<string, unknown>;
-    const prompt = String(detail.prompt ?? "").toLowerCase();
-    return prompt.includes("password");
+    const instruction = String(detail.instruction ?? detail.prompt ?? "").toLowerCase();
+    return instruction.includes("password");
   });
   if (hasPasswordField) {
     frictionFlags.push("Password field required during signup");
@@ -60,8 +67,8 @@ export function computeOnboardingMetrics(steps: StepRecord[]): OnboardingMetrics
 
   const hasPhoneField = fillSteps.some((s) => {
     const detail = s.actionDetail as Record<string, unknown>;
-    const prompt = String(detail.prompt ?? "").toLowerCase();
-    return prompt.includes("phone") || prompt.includes("mobile");
+    const instruction = String(detail.instruction ?? detail.prompt ?? "").toLowerCase();
+    return instruction.includes("phone") || instruction.includes("mobile");
   });
   if (hasPhoneField) {
     frictionFlags.push("Phone number required -- high friction for initial signup");
@@ -101,6 +108,69 @@ async function resizeForVision(bytes: ArrayBuffer): Promise<ArrayBuffer> {
   const ab = new ArrayBuffer(resized.byteLength);
   new Uint8Array(ab).set(resized);
   return ab;
+}
+
+export async function generateDashboardFeedback(params: {
+  steps: StepRecord[];
+  /** Only review “post-signup first screen” when the flow actually finished. */
+  finalStatus: RunResult["finalStatus"];
+}): Promise<DashboardFeedback | null> {
+  if (params.finalStatus !== "done") return null;
+
+  const doneStep = [...params.steps].reverse().find((s) => s.actionType === "done" && s.screenshotBytes);
+  const lastWithShot =
+    doneStep ?? [...params.steps].reverse().find((s) => s.screenshotBytes);
+  if (!lastWithShot?.screenshotBytes) return null;
+
+  const client = anthropicClient();
+  const model = anthropicModel();
+
+  const resized = await resizeForVision(lastWithShot.screenshotBytes);
+
+  const content: MessageParam["content"] = [
+    {
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: "image/jpeg",
+        data: Buffer.from(resized).toString("base64"),
+      },
+    },
+    {
+      type: "text",
+      text: [
+        "You are a senior SaaS product designer reviewing the FIRST screen a new user lands on after signup (dashboard/app home).",
+        "Goal: improve time-to-value and reduce confusion.",
+        "",
+        "Return ONLY valid JSON with this shape:",
+        `{"summary":"string","nextBestAction":"string","uiIssues":[{"severity":"high|med|low","issue":"string","fix":"string"}],"activationChecklist":["string"]}`,
+        "",
+        "Rules:",
+        "- Be concrete. Reference what you see on the screen (labels, layout, empty states).",
+        "- Prioritize onboarding/activation: what should the user do in the first 60 seconds?",
+        "- Suggest UI copy + placement changes a team can ship quickly.",
+      ].join("\n"),
+    },
+  ];
+
+  const msg = await client.messages.create({
+    model,
+    max_tokens: 900,
+    temperature: 0.2,
+    messages: [{ role: "user", content }],
+  });
+
+  const text = msg.content?.find((c) => c.type === "text")?.text ?? "";
+  try {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const jsonStr = fenced ? fenced[1].trim() : text.trim();
+    const braceStart = jsonStr.indexOf("{");
+    const braceEnd = jsonStr.lastIndexOf("}");
+    const clean = braceStart !== -1 ? jsonStr.slice(braceStart, braceEnd + 1) : jsonStr;
+    return JSON.parse(clean) as DashboardFeedback;
+  } catch {
+    return null;
+  }
 }
 
 export async function generateOnboardingRecommendations(params: {
