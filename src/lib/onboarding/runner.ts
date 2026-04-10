@@ -699,9 +699,61 @@ export async function runOnboardingFlow(params: {
 
       const instruction = decision.instruction || decision.reason;
 
+      // If Claude wants to fill a password field, always use the deterministic
+      // code path so the exact persona password is used and every password input
+      // (including confirm-password) gets the identical value.  Sending password
+      // text through the natural-language firecrawlInteract agent risks the
+      // password being subtly altered or only one field being filled.
+      if (decision.action === "fill" && /password/i.test(instruction)) {
+        try {
+          const filled = await fillAllVisiblePasswordInputs({ scrapeId, password: params.persona.password });
+          consecutiveFailures = 0;
+          steps.push({
+            stepIdx: step,
+            url: pageInfo.url,
+            actionType: "fill",
+            actionDetail: {
+              instruction,
+              reason: decision.reason,
+              output: `Filled ${filled.filledCount} password field(s) deterministically`,
+            },
+            durationMs: Date.now() - stepStart,
+            screenshotBytes,
+            blockedReason: null,
+          });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : "Password fill failed";
+          consecutiveFailures++;
+          steps.push({
+            stepIdx: step,
+            url: pageInfo.url,
+            actionType: "fill",
+            actionDetail: { instruction, reason: decision.reason, error: errMsg },
+            durationMs: Date.now() - stepStart,
+            screenshotBytes,
+            blockedReason: null,
+          });
+        }
+        continue;
+      }
+
       try {
         const { output } = await firecrawlInteract({ scrapeId, prompt: instruction });
         consecutiveFailures = 0;
+
+        // After any non-password action, check whether password fields got out
+        // of sync (e.g. a framework reset a field, or a new confirm-password
+        // input appeared).  If so, re-fill them all with the persona password.
+        if (formState.password.count >= 2) {
+          const postPwState = await captureFormState(scrapeId);
+          if (
+            postPwState.password.count >= 2 &&
+            (!postPwState.password.allEqual || postPwState.password.anyEmpty)
+          ) {
+            await fillAllVisiblePasswordInputs({ scrapeId, password: params.persona.password });
+          }
+        }
+
         steps.push({
           stepIdx: step,
           url: pageInfo.url,
