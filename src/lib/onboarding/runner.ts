@@ -27,6 +27,29 @@ export type RunResult = {
 const MAX_STEPS = 20;
 const MAX_DURATION_MS = 5 * 60 * 1000;
 
+/** Retry a function on transient / overloaded errors with exponential backoff. */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: { maxAttempts?: number; baseDelayMs?: number } = {},
+): Promise<T> {
+  const { maxAttempts = 4, baseDelayMs = 2_000 } = opts;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const isRetryable = /overloaded|529|500|502|503|429|rate|ECONNRESET|ETIMEDOUT|socket hang up|fetch failed/i.test(msg);
+      if (!isRetryable || attempt === maxAttempts) break;
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      console.warn(`[onboarding] Claude API attempt ${attempt}/${maxAttempts} failed, retrying in ${delay}ms: ${msg}`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastError;
+}
+
 type ClaudeDecision = {
   action: OnboardingStepAction;
   instruction: string;
@@ -146,13 +169,16 @@ async function askClaude(params: {
     ].join("\n"),
   });
 
-  const msg = await client.messages.create({
-    model,
-    max_tokens: 400,
-    temperature: 0.1,
-    system: buildSystemPrompt(params.persona),
-    messages: [{ role: "user", content }],
-  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const msg: any = await withRetry(() =>
+    client.messages.create({
+      model,
+      max_tokens: 400,
+      temperature: 0.1,
+      system: buildSystemPrompt(params.persona),
+      messages: [{ role: "user", content }],
+    }),
+  );
 
   const text = msg.content?.find((c) => c.type === "text")?.text ?? "";
 
@@ -232,13 +258,16 @@ async function askClaudeRecovery(params: {
       .join("\n"),
   });
 
-  const msg = await client.messages.create({
-    model,
-    max_tokens: 450,
-    temperature: 0.2,
-    system: buildSystemPrompt(params.persona),
-    messages: [{ role: "user", content }],
-  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const msg: any = await withRetry(() =>
+    client.messages.create({
+      model,
+      max_tokens: 450,
+      temperature: 0.2,
+      system: buildSystemPrompt(params.persona),
+      messages: [{ role: "user", content }],
+    }),
+  );
 
   const text = msg.content?.find((c) => c.type === "text")?.text ?? "";
   try {
