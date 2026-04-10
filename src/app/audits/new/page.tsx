@@ -1,11 +1,12 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useState, Suspense } from "react";
 
-export default function NewAuditPage() {
+function NewAuditForm() {
   const router = useRouter();
-  const [url, setUrl] = useState("");
+  const searchParams = useSearchParams();
+  const [url, setUrl] = useState(searchParams.get("url") ?? "");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -132,5 +133,13 @@ export default function NewAuditPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function NewAuditPage() {
+  return (
+    <Suspense>
+      <NewAuditForm />
+    </Suspense>
   );
 }

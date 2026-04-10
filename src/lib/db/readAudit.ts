@@ -7,7 +7,7 @@ export type AuditRunRow = {
   site_summary: unknown | null;
   status: string;
   error: string | null;
-  onboarding_status: string;
+  onboarding_status: string | null;
   onboarding_summary: unknown | null;
   created_at: string;
   updated_at: string;
@@ -109,4 +109,27 @@ export async function listOnboardingSteps(auditRunId: string): Promise<Onboardin
     .order("step_idx", { ascending: true });
   if (error) throw error;
   return (data as OnboardingStepRow[]) ?? [];
+}
+
+export async function listAuditRuns(limit = 50): Promise<AuditRunRow[]> {
+  const sb = supabaseAdmin();
+  const { data, error } = await sb
+    .from("audit_runs")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data as AuditRunRow[]) ?? [];
+}
+
+export async function listAuditRunsForUrl(normalizedUrl: string, limit = 5): Promise<AuditRunRow[]> {
+  const sb = supabaseAdmin();
+  const { data, error } = await sb
+    .from("audit_runs")
+    .select("*")
+    .eq("normalized_url", normalizedUrl)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data as AuditRunRow[]) ?? [];
 }

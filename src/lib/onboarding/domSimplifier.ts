@@ -11,6 +11,7 @@ export type SimplifiedElement = {
   role?: string;
   required?: boolean;
   checked?: boolean;
+  disabled?: boolean;
   options?: string[];
 };
 
@@ -23,8 +24,9 @@ export function simplifyDom(html: string): SimplifiedElement[] {
   const $ = cheerio.load(html);
   const elements: SimplifiedElement[] = [];
 
-  // Remove hidden/invisible elements.
-  $("[hidden], [style*='display:none'], [style*='display: none'], [aria-hidden='true']").remove();
+  // Remove hidden/invisible elements (but keep error messages even if they look hidden).
+  $("[hidden], [style*='display:none'], [style*='display: none']").not("[class*='error'], [class*='alert'], [role='alert']").remove();
+  $("[aria-hidden='true']").not("[class*='error'], [class*='alert'], [role='alert']").remove();
 
   // Headings (give Claude page context).
   $("h1, h2, h3").each((_, el) => {
@@ -70,8 +72,9 @@ export function simplifyDom(html: string): SimplifiedElement[] {
       name,
       placeholder,
       label,
-      required: $el.attr("required") !== undefined,
+      required: $el.attr("required") !== undefined || $el.attr("aria-required") === "true",
       checked: type === "checkbox" ? $el.is(":checked") : undefined,
+      disabled: $el.attr("disabled") !== undefined || $el.attr("aria-disabled") === "true",
     });
   });
 
@@ -135,5 +138,25 @@ export function simplifyDom(html: string): SimplifiedElement[] {
     elements.push({ tag: "a", text, href });
   });
 
-  return elements.slice(0, 60);
+  // Error messages / validation messages — critical for stuck detection.
+  $("[class*='error'], [class*='invalid'], [class*='alert'], [role='alert'], [aria-invalid='true']").each((_, el) => {
+    const $el = $(el);
+    const text = $el.text().replace(/\s+/g, " ").trim();
+    if (text && text.length > 3 && text.length < 300) {
+      elements.push({ tag: "error", text });
+    }
+  });
+
+  // Progress indicators (step 1 of 5, progress bar, etc.).
+  $("[class*='step'], [class*='progress'], [aria-label*='step'], [aria-valuenow]").each((_, el) => {
+    const $el = $(el);
+    const text = $el.text().replace(/\s+/g, " ").trim();
+    const ariaLabel = $el.attr("aria-label");
+    const progressText = text || ariaLabel || "";
+    if (progressText && progressText.length < 100) {
+      elements.push({ tag: "progress", text: progressText });
+    }
+  });
+
+  return elements.slice(0, 80);
 }

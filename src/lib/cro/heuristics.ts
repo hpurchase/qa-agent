@@ -158,5 +158,125 @@ export function runHeuristicCroChecks(e: EvidencePack): CroFinding[] {
     });
   }
 
+  // --- VALUE PROP CLARITY (dynamic — only fires when we can say something specific) ---
+  if (e.headings.h1.length === 1) {
+    const h1 = e.headings.h1[0];
+    const wordCount = h1.split(/\s+/).length;
+    // Detect feature-dump H1s ("AI-powered collaboration platform for remote teams that helps you...")
+    const hasBuzzwords = /\b(ai[- ]powered|next[- ]gen|revolutionary|cutting[- ]edge|world[- ]class|enterprise[- ]grade)\b/i.test(h1);
+    const benefitWords = /\b(save|reduce|grow|increase|boost|simplify|automate|faster|easier|cheaper)\b/i;
+    const hasBenefit = benefitWords.test(h1);
+
+    if (wordCount > 12 && !hasBenefit) {
+      findings.push({
+        id: "h1_no_benefit",
+        severity: "med",
+        title: `H1 describes the product but not the benefit: ${q(h1.length > 70 ? h1.slice(0, 67) + "…" : h1)}`,
+        recommendation: `Your H1 is ${wordCount} words: ${q(h1)}. It describes what the product IS, not what it DOES for the visitor. Rewrite to lead with the outcome: "Reduce [pain] by X%" or "Get [benefit] in minutes."`,
+        whyItMatters: "Visitors care about outcomes, not capabilities. Feature-first H1s require mental work to translate into 'why should I care?'",
+        evidence: { h1, wordCount, hasBenefit: false },
+        howToTest: "A/B test: current H1 vs outcome-first version. Measure: scroll depth past hero and CTA clicks.",
+      });
+    } else if (hasBuzzwords && wordCount > 6) {
+      const buzzFound = h1.match(/\b(ai[- ]powered|next[- ]gen|revolutionary|cutting[- ]edge|world[- ]class|enterprise[- ]grade)\b/gi) ?? [];
+      findings.push({
+        id: "h1_buzzword_heavy",
+        severity: "low",
+        title: `H1 relies on buzzwords (${buzzFound.map(q).join(", ")}) instead of specifics`,
+        recommendation: `Your H1 ${q(h1)} uses ${buzzFound.map(q).join(", ")}. Replace buzzwords with concrete specifics: what exactly does it do, for whom, and what result? E.g., "Deploy ML models in 5 minutes" beats "AI-powered deployment platform."`,
+        whyItMatters: "Everyone says 'AI-powered' — it means nothing to visitors. Specificity builds credibility and differentiates.",
+        evidence: { h1, buzzwords: buzzFound },
+        howToTest: "Replace buzzwords with specifics. Measure: bounce rate and signup rate from homepage.",
+      });
+    }
+  }
+
+  // --- CTA PLACEMENT (dynamic — only when we can map the specific CTAs) ---
+  if (isLive && !isPreLaunch && primaryCtas.length > 0) {
+    const heroCtas = realCtas.filter((c) => c.locationHint === "hero" || c.locationHint === "nav");
+    const primaryInHero = heroCtas.filter((c) => PRIMARY_CTA.test(c.label));
+    const bodyCtas = primaryCtas.filter((c) => c.locationHint === "body");
+    const footerCtas = primaryCtas.filter((c) => c.locationHint === "footer");
+
+    if (primaryInHero.length === 0 && bodyCtas.length > 0) {
+      // CTA exists but only in the body — specific about where it is
+      const bodyLabels = uniqByLower(bodyCtas.map((c) => c.label));
+      findings.push({
+        id: "cta_below_fold",
+        severity: "high",
+        title: `Signup CTA (${bodyLabels.slice(0, 2).map(q).join(", ")}) only appears in the page body, not above the fold`,
+        recommendation: `Found ${primaryCtas.length} signup CTA(s) but they're all in the body: ${bodyLabels.map(q).join(", ")}. Duplicate your primary CTA into the hero section. Keep the body CTAs too — visitors who scroll past need another chance.`,
+        whyItMatters: "50%+ of visitors never scroll past the first viewport. A CTA only in the body section is invisible to most visitors.",
+        evidence: { bodyCtaLabels: bodyLabels, heroCtaCount: primaryInHero.length, totalPrimaryCount: primaryCtas.length },
+        howToTest: "Add hero CTA. Measure: total CTA clicks (hero + body) and signup conversion.",
+      });
+    } else if (primaryInHero.length === 0 && footerCtas.length > 0 && bodyCtas.length === 0) {
+      // CTA only in footer — even worse
+      findings.push({
+        id: "cta_only_footer",
+        severity: "high",
+        title: `Signup CTA only appears in the footer — most visitors will never see it`,
+        recommendation: `The only signup CTA (${q(footerCtas[0].label)}) is in the footer. Move it to the hero section and add repeating CTAs after key content sections (features, testimonials, pricing).`,
+        whyItMatters: "Footer CTAs convert 5-10x worse than hero CTAs because only 10-20% of visitors reach the footer.",
+        evidence: { footerCtaLabel: footerCtas[0].label, heroCtaCount: 0, bodyCtaCount: 0 },
+        howToTest: "Add hero CTA + mid-page CTA. Measure: total signup conversion.",
+      });
+    }
+  }
+
+  // --- REASSURANCE GAP (dynamic — adapts to what type of signup the site has) ---
+  if (isLive && !isPreLaunch && primaryCtas.length > 0) {
+    const hasReassurance = e.plg.mentionsNoCreditCard || e.plg.mentionsFreeForever || e.plg.mentionsCancelAnytime;
+    if (!hasReassurance && e.forms.some((f) => f.hasPassword)) {
+      // Site has a signup form with a password field but no reassurance — high confidence this matters
+      const formLabels = e.forms.filter((f) => f.hasPassword).flatMap((f) => f.labels);
+      findings.push({
+        id: "no_reassurance_with_form",
+        severity: "med",
+        title: `Signup form asks for a password but page has no "free" or "no credit card" messaging`,
+        recommendation: `The signup form (fields: ${formLabels.slice(0, 4).map(q).join(", ") || "email + password"}) asks for commitment (password = account creation) but there's no reassurance that it's free or risk-free. Add "No credit card required" or "Free plan available" directly above or below the form.`,
+        whyItMatters: "A password field signals 'creating an account' which triggers loss aversion. Reassurance text reduces that friction by 10-30%.",
+        evidence: { hasPassword: true, formLabels: formLabels.slice(0, 6), mentionsNoCreditCard: false, mentionsFreeForever: false },
+        howToTest: "Add 'No credit card required' below the form submit button. Measure: form start rate and completion rate.",
+      });
+    }
+  }
+
+  // --- MIXED CONVERSION MOTIONS (dynamic — specific about which CTAs conflict) ---
+  if (!isPreLaunch && primaryCtas.length > 0 && salesCtas.length > 0) {
+    const primaryInHero = primaryCtas.filter((c) => c.locationHint === "hero");
+    const salesInHero = salesCtas.filter((c) => c.locationHint === "hero");
+    if (primaryInHero.length > 0 && salesInHero.length > 0) {
+      findings.push({
+        id: "mixed_motions_hero",
+        severity: "med",
+        title: `Hero has competing CTAs: ${q(primaryInHero[0].label)} vs ${q(salesInHero[0].label)}`,
+        recommendation: `The hero area has both ${q(primaryInHero[0].label)} (self-serve) and ${q(salesInHero[0].label)} (sales). Pick your primary motion based on your ICP: if most customers are <50 employees, lead with the trial. Make the secondary one a text link, not a button.`,
+        whyItMatters: "Two equal-weight CTAs in the hero split attention. Visitors who can't decide which to click often click neither.",
+        evidence: { heroPrimary: primaryInHero.map((c) => c.label), heroSales: salesInHero.map((c) => c.label) },
+        howToTest: "Make one CTA visually primary (filled button) and the other secondary (outlined or text link). Measure: total hero CTA clicks.",
+      });
+    }
+  }
+
+  // --- CTA-TO-FORM MISMATCH (dynamic — detects when CTA says "free trial" but form asks for payment info) ---
+  if (primaryCtas.length > 0 && e.forms.length > 0) {
+    const ctaSaysFree = primaryCtas.some((c) => /free|trial|no.?credit/i.test(c.label));
+    const formHasPayment = e.forms.some((f) => f.hasPaymentFields);
+    if (ctaSaysFree && formHasPayment) {
+      const freeCta = primaryCtas.find((c) => /free|trial|no.?credit/i.test(c.label));
+      const paymentLabels = e.forms.flatMap((f) => f.labels).filter((l) => /card|payment|billing|cvv|expir/i.test(l));
+      findings.push({
+        id: "cta_form_mismatch",
+        severity: "high",
+        title: `CTA says ${q(freeCta?.label ?? "free trial")} but the form asks for payment info (${paymentLabels.slice(0, 2).map(q).join(", ")})`,
+        recommendation: `Your CTA promises ${q(freeCta?.label ?? "free")} but the signup form includes payment fields: ${paymentLabels.map(q).join(", ")}. This breaks trust. Either remove payment fields from initial signup or change the CTA to be honest about what's required.`,
+        whyItMatters: "Bait-and-switch from 'free' to 'enter payment' is the #1 cause of signup abandonment. 60-80% of users drop off at this point.",
+        evidence: { ctaLabel: freeCta?.label, paymentFields: paymentLabels },
+        howToTest: "Remove payment from initial signup (charge later). Measure: signup completion rate.",
+      });
+    }
+  }
+
   return findings;
 }

@@ -32,3 +32,49 @@ details > summary::marker {
   display: none;
   content: "";
 }
+
+/* Print / PDF export styles */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .print\:hidden {
+    display: none !important;
+  }
+
+  .print\:open[open],
+  details.print\:open {
+    /* Force all details open for print */
+  }
+
+  details.print\:open > summary ~ * {
+    display: block !important;
+  }
+
+  /* Force details to be open when printing */
+  details {
+    open: true;
+  }
+
+  details[class*="print:open"] {
+    /* Already handled by Tailwind */
+  }
+
+  /* Expand all recommendation details for print */
+  details > div {
+    display: block !important;
+  }
+
+  details > summary svg:last-child {
+    display: none !important;
+  }
+
+  /* Avoid page breaks inside cards */
+  .rounded-2xl, .rounded-xl, details {
+    break-inside: avoid;
+  }
+}

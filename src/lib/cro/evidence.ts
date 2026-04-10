@@ -12,13 +12,29 @@ export type EvidencePack = {
     kind: "button" | "link";
     locationHint: "nav" | "hero" | "body" | "footer" | "unknown";
   }>;
-  forms: Array<{ fields: number; labels: string[]; hasPassword: boolean }>;
+  forms: Array<{
+    fields: number;
+    labels: string[];
+    hasPassword: boolean;
+    hasPaymentFields: boolean;
+    requiredCount: number;
+  }>;
   trustSignals: {
     hasTestimonials: boolean;
     hasLogoStrip: boolean;
     mentionsSOC2: boolean;
     mentionsGDPR: boolean;
+    hasCustomerCount: boolean;
+    customerCountText: string | null;
+    hasSpecificStats: boolean;
   };
+  urgency: {
+    hasLimitedTime: boolean;
+    hasTrialLength: boolean;
+    trialLengthText: string | null;
+    hasMoneyBackGuarantee: boolean;
+  };
+  competitors: string[];
   plg: {
     pricingLinkHrefs: string[];
     pricingSummary?: {
@@ -145,17 +161,44 @@ export function buildEvidencePack(params: { html: string; baseUrl: string }): Ev
       .map((_, l) => textOf($(l)))
       .get()
       .filter(Boolean);
+    const allLabels = labels.join(" ").toLowerCase();
     const hasPassword = inputs.toArray().some((i) => ($(i).attr("type") ?? "").toLowerCase() === "password");
-    forms.push({ fields: inputs.length, labels: labels.slice(0, 30), hasPassword });
+    const hasPaymentFields = /card|payment|billing|cvv|expir|stripe/i.test(allLabels) ||
+      inputs.toArray().some((i) => /card|payment|cvv|expir/i.test($(i).attr("name") ?? ""));
+    const requiredCount = inputs.toArray().filter((i) =>
+      $(i).attr("required") !== undefined || $(i).attr("aria-required") === "true",
+    ).length;
+    forms.push({ fields: inputs.length, labels: labels.slice(0, 30), hasPassword, hasPaymentFields, requiredCount });
   });
 
   const pageText = $("body").text().replace(/\s+/g, " ").toLowerCase();
+
+  // Trust signals — deeper extraction
+  const customerCountMatch = pageText.match(/(\d[\d,]+\+?)\s*(customers?|teams?|companies|businesses|users?|people)\s*(trust|use|love|rely)/i);
+  const specificStatMatch = pageText.match(/\d+%\s*(faster|more|increase|reduction|cheaper|less|improvement)/i);
   const trustSignals: EvidencePack["trustSignals"] = {
-    hasTestimonials: /testimonial|customers say|case study|reviews/.test(pageText),
-    hasLogoStrip: /trusted by|customers include|logos? of/.test(pageText),
+    hasTestimonials: /testimonial|customers say|case study|reviews|"[^"]{20,}"/.test(pageText),
+    hasLogoStrip: /trusted by|customers include|logos? of|used by|powering/.test(pageText),
     mentionsSOC2: /soc\s*2/.test(pageText),
     mentionsGDPR: /gdpr/.test(pageText),
+    hasCustomerCount: !!customerCountMatch,
+    customerCountText: customerCountMatch ? customerCountMatch[0].trim() : null,
+    hasSpecificStats: !!specificStatMatch,
   };
+
+  // Urgency/scarcity signals
+  const trialMatch = pageText.match(/(\d+)[\s-]*(day|week|month)\s*(free\s*)?trial/i);
+  const urgency: EvidencePack["urgency"] = {
+    hasLimitedTime: /limited\s*time|hurry|offer\s*ends|today\s*only|act\s*now/i.test(pageText),
+    hasTrialLength: !!trialMatch,
+    trialLengthText: trialMatch ? trialMatch[0].trim() : null,
+    hasMoneyBackGuarantee: /money[\s-]*back|refund|guarantee/i.test(pageText),
+  };
+
+  // Competitor mentions
+  const KNOWN_COMPETITORS = /\b(slack|notion|asana|jira|trello|hubspot|salesforce|intercom|zendesk|stripe|shopify|mailchimp|convertkit|airtable|clickup|monday|figma|canva|zapier|segment|amplitude|mixpanel|datadog|pagerduty|linear|gitlab|github|vercel|netlify|heroku|aws|gcp|azure)\b/gi;
+  const competitorMentions = pageText.match(KNOWN_COMPETITORS) ?? [];
+  const competitors = [...new Set(competitorMentions.map((c) => c.toLowerCase()))].slice(0, 10);
 
   const pricingLinks = $("a")
     .map((_, a) => {
@@ -200,6 +243,8 @@ export function buildEvidencePack(params: { html: string; baseUrl: string }): Ev
     ctas: ctas.slice(0, 80),
     forms: forms.slice(0, 10),
     trustSignals,
+    urgency,
+    competitors,
     plg: {
       pricingLinkHrefs: Array.from(new Set(pricingLinks)).slice(0, 20),
       pricingSummary: null,

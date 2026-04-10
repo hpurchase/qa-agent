@@ -1,15 +1,17 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { AuditAutoRefresh } from "./AuditClient";
+import { AuditAutoRefresh, ShareButton, PrintButton } from "./AuditClient";
 import {
   getAuditRun,
   listAuditTargets,
   listArtifacts,
   listFindings,
   listOnboardingSteps,
+  listAuditRunsForUrl,
 } from "@/lib/db/readAudit";
 import { signAuditArtifactUrl } from "@/lib/storage";
 import type { CroFinding } from "@/lib/cro/heuristics";
+import { computeAuditScores, gradeColor, type AuditScores } from "@/lib/cro/scoring";
 
 function env(name: string, fallback?: string) {
   return process.env[name] ?? fallback ?? "";
@@ -145,8 +147,8 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
   const hasLlm = findings.some((f) => f.source === "llm");
 
   // Onboarding data.
-  const onboardingStatus = (run as Record<string, unknown>).onboarding_status as string | undefined ?? "pending";
-  const onboardingSummary = (run as Record<string, unknown>).onboarding_summary as Record<string, unknown> | null;
+  const onboardingStatus = run.onboarding_status ?? "pending";
+  const onboardingSummary = run.onboarding_summary as Record<string, unknown> | null;
   const onboardingDone = onboardingStatus === "done" || onboardingStatus === "blocked";
   const onboardingRunning = onboardingStatus === "running";
   const onboardingFailed = onboardingStatus === "failed";
@@ -186,54 +188,162 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
   const lastObInstruction = lastObDetail.instruction ? String(lastObDetail.instruction) : null;
   const lastObStepError = lastObDetail.error ? String(lastObDetail.error) : null;
 
+  // Scoring
+  const onboardingInput = obStepCount > 0 ? {
+    stepCount: obStepCount,
+    formFieldCount: (onboardingSummary?.formFieldCount as number) ?? 0,
+    frictionFlags: obFriction,
+    finalStatus: obFinalStatus,
+    estimatedTimeToValueMs: obTimeToValue,
+  } : null;
+  const scores: AuditScores = computeAuditScores(allRecs, onboardingInput);
+  const gc = gradeColor(scores.grade);
+
+  // Executive summary from site_summary
+  const siteSummary = run.site_summary as Record<string, unknown> | null;
+  const productCategory = (siteSummary?.productCategory as string) ?? null;
+  const valueProp = (siteSummary?.valueProp as string) ?? null;
+  const icp = (siteSummary?.icp as string) ?? null;
+  const conversionMotion = (siteSummary?.conversionMotion as string) ?? null;
+  const plgMismatch = (siteSummary?.plgMismatch as boolean) ?? false;
+  const hasSummary = !!(productCategory || valueProp);
+
+  // Previous audits for this URL
+  const previousAudits = await listAuditRunsForUrl(run.normalized_url, 5);
+  const otherAudits = previousAudits.filter((a) => a.id !== run.id);
+
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
       <AuditAutoRefresh status={run.status} onboardingStatus={onboardingStatus} />
 
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4 print:pb-2">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            SaaS Growth Audit
-          </h1>
+          <div className="flex items-center gap-3">
+            <Link href="/audits" className="text-sm text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 print:hidden">
+              All audits
+            </Link>
+            <span className="text-zinc-300 dark:text-zinc-700 print:hidden">/</span>
+            <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+              SaaS Growth Audit
+            </h1>
+          </div>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{run.normalized_url}</p>
         </div>
-        <Link
-          href="/audits/new"
-          className="inline-flex h-9 items-center justify-center rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900"
-        >
-          New audit
-        </Link>
+        <div className="flex items-center gap-2 print:hidden">
+          <ShareButton />
+          <PrintButton />
+          <Link
+            href={`/audits/new?url=${encodeURIComponent(run.normalized_url)}`}
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900"
+          >
+            Re-audit
+          </Link>
+          <Link
+            href="/audits/new"
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+          >
+            New audit
+          </Link>
+        </div>
       </div>
 
-      {/* Status bar */}
-      <div className="mt-5 flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
-        {isDone ? (
-          <div className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-        ) : isFailed ? (
-          <div className="h-2.5 w-2.5 rounded-full bg-red-500" />
-        ) : (
-          <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-amber-500" />
-        )}
-        <span className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-          {isDone
-            ? "Audit complete"
-            : isFailed
+      {/* Score + Executive Summary (shown when audit is done) */}
+      {isDone && allRecs.length > 0 && (
+        <div className="mt-6 grid gap-4 sm:grid-cols-[auto_1fr] print:grid-cols-[auto_1fr]">
+          {/* Score ring */}
+          <div className={`flex flex-col items-center justify-center rounded-2xl border border-zinc-200 ${gc.bg} px-8 py-6 dark:border-zinc-800`}>
+            <div className="relative h-28 w-28">
+              <svg className="h-28 w-28 -rotate-90" viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="52" fill="none" strokeWidth="10" className="stroke-zinc-200 dark:stroke-zinc-800" />
+                <circle
+                  cx="60" cy="60" r="52" fill="none" strokeWidth="10"
+                  strokeLinecap="round"
+                  className={gc.ring}
+                  strokeDasharray={`${(scores.overall / 100) * 327} 327`}
+                />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className={`text-3xl font-bold ${gc.text}`}>{scores.overall}</span>
+                <span className="text-xs text-zinc-500">/ 100</span>
+              </div>
+            </div>
+            <div className={`mt-2 text-lg font-bold ${gc.text}`}>{scores.grade}</div>
+            <div className="mt-1 flex gap-3 text-[11px] text-zinc-500">
+              {scores.highCount > 0 && <span className="text-red-600">{scores.highCount} high</span>}
+              {scores.medCount > 0 && <span className="text-amber-600">{scores.medCount} med</span>}
+              {scores.lowCount > 0 && <span>{scores.lowCount} low</span>}
+            </div>
+            {scores.onboardingScore >= 0 && (
+              <div className="mt-2 flex gap-3 text-[11px] text-zinc-400">
+                <span>CRO: {scores.croScore}</span>
+                <span>Onboarding: {scores.onboardingScore}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Executive Summary */}
+          <div className="rounded-2xl border border-zinc-200 bg-white px-6 py-5 dark:border-zinc-800 dark:bg-zinc-950">
+            <h2 className="text-sm font-semibold uppercase tracking-widest text-zinc-400">Executive Summary</h2>
+            {hasSummary ? (
+              <div className="mt-3 space-y-2">
+                {valueProp && (
+                  <p className="text-base font-medium text-zinc-900 dark:text-zinc-50">{valueProp}</p>
+                )}
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {productCategory && (
+                    <span className="rounded-full bg-zinc-100 px-3 py-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{productCategory}</span>
+                  )}
+                  {conversionMotion && (
+                    <span className="rounded-full bg-zinc-100 px-3 py-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      {conversionMotion === "start_trial" ? "Free Trial" : conversionMotion === "signup" ? "Self-Serve Signup" : conversionMotion === "request_demo" ? "Demo-Led" : "Sales-Led"}
+                    </span>
+                  )}
+                  {icp && (
+                    <span className="rounded-full bg-zinc-100 px-3 py-1 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{icp}</span>
+                  )}
+                </div>
+                {plgMismatch && (
+                  <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                    PLG mismatch detected — your site targets self-serve buyers but uses a sales-led conversion motion.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-zinc-500">
+                {allRecs.length} recommendation{allRecs.length !== 1 ? "s" : ""} found across {targets.length} page{targets.length !== 1 ? "s" : ""}.
+                {hasLlm ? " AI-powered analysis included." : ""}
+              </p>
+            )}
+            <div className="mt-4 flex gap-4 text-xs text-zinc-500">
+              <span>{targets.length} page{targets.length !== 1 ? "s" : ""} audited</span>
+              <span>{allRecs.length} recommendation{allRecs.length !== 1 ? "s" : ""}</span>
+              {hasLlm && <span>AI-powered</span>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Status bar (shown when running or failed) */}
+      {!isDone && (
+        <div className="mt-5 flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+          {isFailed ? (
+            <div className="h-2.5 w-2.5 rounded-full bg-red-500" />
+          ) : (
+            <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-amber-500" />
+          )}
+          <span className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+            {isFailed
               ? "Audit failed"
               : stage
                 ? STEP_LABELS[stage] ?? stage
                 : "Starting…"}
-        </span>
-        {run.error && !isDone ? (
-          <span className="ml-auto text-xs text-red-600">{run.error}</span>
-        ) : null}
-        {isDone && (
-          <span className="ml-auto text-xs text-zinc-500">
-            {targets.length} page{targets.length !== 1 ? "s" : ""} audited
-            {hasLlm ? " • AI-powered" : ""}
           </span>
-        )}
-      </div>
+          {run.error && !isDone ? (
+            <span className="ml-auto text-xs text-red-600">{run.error}</span>
+          ) : null}
+        </div>
+      )}
 
       {/* Two-job progress (always visible when not both done) */}
       <div className="mt-3 grid grid-cols-2 gap-3">
@@ -399,7 +509,13 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
                 <details
                   key={`${r.id ?? ""}-${idx}`}
                   id={`rec-${idx}`}
-                  className="group"
+                  className={`group print:open ${
+                    r.severity === "high"
+                      ? "border-l-4 border-l-red-400 dark:border-l-red-600"
+                      : r.severity === "med"
+                        ? "border-l-4 border-l-amber-400 dark:border-l-amber-600"
+                        : ""
+                  }`}
                 >
                   <summary className="flex cursor-pointer items-start gap-3 px-5 py-4 hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
                     <span
@@ -825,6 +941,30 @@ lastStepError: ${lastObStepError ? lastObStepError : "—"}`}
               );
             })
           : null}
+
+        {/* Previous audits for this URL */}
+        {otherAudits.length > 0 && (
+          <div className="rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 print:hidden">
+            <div className="border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
+              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Previous audits for this URL</h2>
+            </div>
+            <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {otherAudits.map((prev) => (
+                <Link
+                  key={prev.id}
+                  href={`/audits/${prev.id}`}
+                  className="flex items-center gap-3 px-5 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
+                >
+                  <div className={`h-2 w-2 rounded-full ${prev.status === "done" ? "bg-emerald-500" : prev.status === "failed" ? "bg-red-500" : "bg-amber-500"}`} />
+                  <span className="text-sm text-zinc-700 dark:text-zinc-300">
+                    {new Date(prev.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                  <span className="ml-auto text-xs text-zinc-400">{prev.status}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

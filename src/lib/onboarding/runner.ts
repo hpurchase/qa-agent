@@ -24,8 +24,8 @@ export type RunResult = {
   blockedReason: string | null;
 };
 
-const MAX_STEPS = 10;
-const MAX_DURATION_MS = 3 * 60 * 1000;
+const MAX_STEPS = 20;
+const MAX_DURATION_MS = 5 * 60 * 1000;
 
 type ClaudeDecision = {
   action: OnboardingStepAction;
@@ -85,13 +85,16 @@ function buildSystemPrompt(persona: TestPersona): string {
     "   - \"Click the 'Skip' link\"",
     `2b. If you see a password field, fill it with "${persona.password}" (unless already filled).`,
     "3. Always agree to terms and conditions.",
-    "4. Skip optional steps (invite teammates, add avatar) by clicking Skip/Later/Not now.",
-    "5. If you see a CAPTCHA or hCaptcha, return action=blocked.",
-    "6. If you see a payment form or Stripe, return action=blocked.",
-    "7. If only OAuth/SSO login is available (no email+password), return action=blocked.",
-    "8. If you see 'check your email' / 'verify your email' / 'enter code', return action=email_verify.",
-    "9. When you reach a dashboard or app home screen, return action=done.",
-    "10. If the page is loading, return action=wait.",
+    "4. Skip optional steps (invite teammates, add avatar, connect integrations) by clicking Skip/Later/Not now/Remind me later.",
+    "5. If you see a CAPTCHA, hCaptcha, reCAPTCHA, or 'verify you are human', return action=blocked.",
+    "6. If you see a payment form, credit card input, Stripe checkout, or billing form, return action=blocked.",
+    "7. If only OAuth/SSO login is available (no email+password option at all), return action=blocked.",
+    "8. If you see 'check your email' / 'verify your email' / 'enter code' / 'confirmation link', return action=email_verify.",
+    "9. If you see two-factor authentication (2FA), SMS verification, authenticator app prompt, or 'enter the code from your phone', return action=blocked with reason 'Two-factor authentication required'.",
+    "10. When you reach a dashboard, app home screen, workspace, or 'welcome' page that looks like the product (not the marketing site), return action=done.",
+    "11. If the page is loading or shows a spinner, return action=wait.",
+    "12. If you see a validation error (red text, error banner), read the error and try to fix it — e.g., if it says 'email already in use', report action=blocked. If it says 'password too short', try a longer password.",
+    "13. If a dropdown or select asks for something you don't have exact data for (industry, how did you hear about us, etc.), pick the most generic option or 'Other'.",
     "",
     "Return ONLY valid JSON:",
     '{"action":"fill|click|select|check|wait|skip|email_verify|done|blocked","instruction":"plain English command for the browser","reason":"brief explanation of what you see"}',
@@ -210,10 +213,19 @@ async function askClaudeRecovery(params: {
       "Recent actions:",
       ...recent.map((s, i) => `${i + 1}. ${s.action} | ${s.instruction} | ${s.reason}`),
       "",
-      "RECOVERY RULES:",
-      "1) Do NOT repeat the last instruction verbatim.",
-      "2) Prefer the smallest plausible unblocker: fill missing required field (often password), click primary submit/continue, scroll to reveal submit, dismiss modal, accept terms, or go back one step if needed.",
-      "3) Return ONE action only, as JSON in the normal format.",
+      "RECOVERY STRATEGIES (try in this order):",
+      "1. Look for a validation error message (red text, error banner). If found, address the specific issue it mentions.",
+      "2. Check if a required field is empty — especially password, email, or company name. Fill it.",
+      "3. Look for a modal, popup, or cookie banner blocking the form. Dismiss it.",
+      "4. Check if there's an unchecked 'I agree to terms' checkbox. Check it.",
+      "5. Scroll down to see if a submit/continue button is below the visible area. Click it.",
+      "6. If the form appears submitted but the page hasn't changed, wait 3 seconds for it to load.",
+      "7. As a last resort, look for a different path — a 'Back' link, a different signup method, or a nav link.",
+      "",
+      "RULES:",
+      "- Do NOT repeat the last instruction verbatim.",
+      "- Return ONE action only, as JSON in the normal format.",
+      "- Be specific in your instruction (name the exact field, button, or element).",
       last?.instruction ? `Last instruction (do not repeat): ${last.instruction}` : "",
     ]
       .filter(Boolean)
@@ -504,10 +516,10 @@ export async function runOnboardingFlow(params: {
         }
       }
 
-      // 6. Stuck loop detection.
+      // 6. Stuck loop detection — use fuzzy matching, not exact.
       const hash = domHash(pageInfo.html || "empty");
       recentHashes.push(hash);
-      if (recentHashes.length > 3) recentHashes.shift();
+      if (recentHashes.length > 4) recentHashes.shift();
 
       // 7. Ask Claude what to do next.
       const stepStart = Date.now();
@@ -524,33 +536,62 @@ export async function runOnboardingFlow(params: {
         reason: decision.reason,
       });
 
-      const actionKey = `${decision.action}|${decision.instruction}`.slice(0, 300);
+      // Normalize action key for comparison (lowercase, strip quotes/whitespace variance).
+      const normalizeKey = (a: string, i: string) =>
+        `${a}|${i}`.toLowerCase().replace(/["'`]/g, "").replace(/\s+/g, " ").trim().slice(0, 200);
+      const actionKey = normalizeKey(decision.action, decision.instruction);
       recentActionKeys.push(actionKey);
-      if (recentActionKeys.length > 3) recentActionKeys.shift();
+      if (recentActionKeys.length > 4) recentActionKeys.shift();
 
-      // If we appear to be stuck (same DOM + repeated action),
-      // ask Claude to "step back" and choose a different unblocker action.
-      if (
-        recentHashes.length >= 3 &&
-        recentHashes.every((h) => h === recentHashes[0]) &&
+      // Detect stuck: page barely changed AND action is semantically repeated.
+      // "Barely changed" = majority of recent hashes are the same (allows minor DOM flicker).
+      const uniqueHashes = new Set(recentHashes);
+      const pageStuck = recentHashes.length >= 3 && uniqueHashes.size <= 2;
+      // "Action repeated" = last 2 normalized action keys match.
+      const actionRepeated =
         recentActionKeys.length >= 2 &&
-        recentActionKeys[recentActionKeys.length - 1] === recentActionKeys[recentActionKeys.length - 2] &&
-        recoveryAttempts < 2
-      ) {
-        recoveryAttempts++;
-        const recovery = await askClaudeRecovery({
-          persona: params.persona,
-          screenshotBytes,
-          simplifiedDom: simplifiedJson,
-          previousSteps: previousActions,
-          stuckReason: "Same page content and repeated action without progress",
-        });
-        decision = recovery;
-        previousActions.push({
-          action: decision.action,
-          instruction: decision.instruction,
-          reason: `RECOVERY: ${decision.reason}`,
-        });
+        recentActionKeys[recentActionKeys.length - 1] === recentActionKeys[recentActionKeys.length - 2];
+      // Also detect if we've been on the same URL for 4+ steps with no progress.
+      const urlStuck =
+        recentHashes.length >= 4 &&
+        previousActions.length >= 4 &&
+        previousActions.slice(-4).every((a) => a.action === "fill" || a.action === "click") &&
+        uniqueHashes.size <= 2;
+
+      if ((pageStuck && actionRepeated) || urlStuck) {
+        if (recoveryAttempts < 3) {
+          recoveryAttempts++;
+          const stuckReason = urlStuck
+            ? `Page URL unchanged for ${recentHashes.length} steps with no visible progress`
+            : "Same page content and repeated action without progress";
+          const recovery = await askClaudeRecovery({
+            persona: params.persona,
+            screenshotBytes,
+            simplifiedDom: simplifiedJson,
+            previousSteps: previousActions,
+            stuckReason,
+          });
+          decision = recovery;
+          previousActions.push({
+            action: decision.action,
+            instruction: decision.instruction,
+            reason: `RECOVERY: ${decision.reason}`,
+          });
+        } else {
+          // Exhausted recovery attempts — declare stuck.
+          steps.push({
+            stepIdx: step,
+            url: pageInfo.url,
+            actionType: "blocked",
+            actionDetail: { reason: "Stuck after 3 recovery attempts" },
+            durationMs: Date.now() - stepStart,
+            screenshotBytes,
+            blockedReason: "Stuck in loop after 3 recovery attempts",
+          });
+          finalStatus = "stuck";
+          blockedReason = "Stuck in loop after 3 recovery attempts";
+          break;
+        }
       }
 
       // --- Terminal actions ---
@@ -661,8 +702,13 @@ export async function runOnboardingFlow(params: {
           blockedReason: null,
         });
       } catch (err) {
-        consecutiveFailures++;
         const errMsg = err instanceof Error ? err.message : "Interact failed";
+        const isTransient =
+          (err instanceof Error && err.name === "AbortError") ||
+          (err instanceof DOMException && err.name === "AbortError") ||
+          (err instanceof Error && /timeout|ECONNRESET|socket hang up|network|502|503|429|abort/i.test(err.message));
+        // Only count non-transient errors toward the failure limit.
+        if (!isTransient) consecutiveFailures++;
         steps.push({
           stepIdx: step,
           url: pageInfo.url,
@@ -672,9 +718,9 @@ export async function runOnboardingFlow(params: {
           screenshotBytes,
           blockedReason: null,
         });
-        if (consecutiveFailures >= 3) {
+        if (consecutiveFailures >= 4) {
           finalStatus = "error";
-          blockedReason = `3 consecutive action failures. Last: ${errMsg}`;
+          blockedReason = `${consecutiveFailures} consecutive action failures. Last: ${errMsg}`;
           break;
         }
         continue;
