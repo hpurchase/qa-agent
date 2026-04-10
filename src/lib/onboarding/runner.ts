@@ -346,18 +346,23 @@ async function captureFormState(
             };
           }).filter(Boolean);
         });
-        const pwValues = inputs
-          .filter((i) => i.type === 'password')
-          .map((i) => i.valueLength);
-        // We can't return the actual password values (sensitive), but we can detect "empty" and
-        // whether all password fields appear consistent by comparing DOM input values internally.
-        const pwDomValues = Array.from(document.querySelectorAll('input[type="password"]'))
-          .map((el) => (el && (el).value) || '')
-          .filter((v) => v !== null);
-        const pwCount = pwDomValues.length;
-        const anyEmpty = pwDomValues.some((v) => !v || v.length === 0);
-        const allEqual = pwDomValues.every((v) => v === pwDomValues[0]);
-        JSON.stringify({ inputs, password: { count: pwCount, anyEmpty, allEqual } });
+        // Detect password field state entirely within the browser context via $$eval
+        // so we can read actual input values for equality comparison.
+        const pwState = await page.$$eval('input[type="password"]', (els) => {
+          const visible = els.filter((el) => {
+            const style = window.getComputedStyle(el);
+            return style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              (el.offsetWidth > 0 || el.offsetHeight > 0);
+          });
+          const values = visible.map((el) => el.value || '');
+          return {
+            count: values.length,
+            anyEmpty: values.some((v) => !v || v.length === 0),
+            allEqual: values.length <= 1 || values.every((v) => v === values[0]),
+          };
+        });
+        JSON.stringify({ inputs, password: pwState });
       `,
     });
     const raw = result.result ?? result.stdout ?? "";
@@ -465,14 +470,19 @@ export async function runOnboardingFlow(params: {
       const hasPassword = formState.inputs.some((i) => i.type === "password") || formState.password.count > 0;
       const emptyPassword =
         formState.inputs.some((i) => i.type === "password" && i.valueLength === 0) || formState.password.anyEmpty;
-      const recentlyTriedPassword = previousActions
-        .slice(-3)
-        .some((a) => (a.instruction || "").toLowerCase().includes("password"));
 
       // If there are multiple password fields (confirm password), ensure they match.
       const needsPasswordSync = formState.password.count >= 2 && (!formState.password.allEqual || formState.password.anyEmpty);
 
-      if (hasPassword && (emptyPassword || needsPasswordSync) && !recentlyTriedPassword) {
+      // Only skip auto-fill if the deterministic auto-fill itself just ran on the
+      // immediately previous step.  Don't skip when Claude filled a password via
+      // natural-language instruction — that targets a single field and won't cover
+      // the confirm-password input.
+      const justAutoFilledPassword =
+        previousActions.length > 0 &&
+        previousActions[previousActions.length - 1].instruction === "Auto-fill password";
+
+      if (hasPassword && (emptyPassword || needsPasswordSync) && !justAutoFilledPassword) {
         const stepStart = Date.now();
         try {
           // Use deterministic code fill so password + confirm can't diverge.
