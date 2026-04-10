@@ -103,5 +103,68 @@ export function runCrossPageChecks(pages: PageEvidence[]): CroFinding[] {
     }
   }
 
-  return findings.slice(0, 8);
+  // Pricing page has no direct link to signup.
+  if (pricing && signup) {
+    const pricingSignupLinks = pricing.evidence.plg.signupLinkHrefs;
+    const pricingPrimaryCtas = pricing.evidence.ctas.filter((c) => PRIMARY_CTA.test(c.label));
+    if (pricingSignupLinks.length === 0 && pricingPrimaryCtas.length === 0) {
+      findings.push({
+        id: "pricing_no_signup_link",
+        severity: "high",
+        title: "Pricing page has no link or CTA to the signup page",
+        recommendation: `The pricing page at ${pricing.url} has no signup/trial CTAs or links to ${signup.url}. Add a clear "Start Free Trial" or "Get Started" button to each pricing tier.`,
+        whyItMatters: "Pricing page visitors are the highest-intent users. If they can't immediately start, they bounce — you lose your best leads.",
+        evidence: { pricingUrl: pricing.url, signupUrl: signup.url, pricingCtaCount: pricingPrimaryCtas.length, signupLinkCount: pricingSignupLinks.length },
+        howToTest: "Add trial CTAs to each pricing tier. Measure: pricing→signup conversion rate.",
+      });
+    }
+  }
+
+  // Value prop inconsistency: homepage H1 vs pricing page H1.
+  if (homepage && pricing) {
+    const hpH1 = homepage.evidence.headings.h1[0]?.toLowerCase().trim() ?? "";
+    const prH1 = pricing.evidence.headings.h1[0]?.toLowerCase().trim() ?? "";
+    if (hpH1 && prH1) {
+      // Check if they share zero meaningful words (ignore short/common words)
+      const stop = new Set(["the", "a", "an", "and", "or", "for", "to", "of", "is", "in", "on", "with", "your", "our", "by", "it", "its", "that", "this", "we"]);
+      const hpWords = new Set(hpH1.split(/\s+/).filter((w) => w.length > 2 && !stop.has(w)));
+      const prWords = prH1.split(/\s+/).filter((w) => w.length > 2 && !stop.has(w));
+      const overlap = prWords.filter((w) => hpWords.has(w)).length;
+
+      if (hpWords.size > 0 && prWords.length > 0 && overlap === 0) {
+        findings.push({
+          id: "cross_value_prop_mismatch",
+          severity: "med",
+          title: "Homepage and pricing page headings share no common messaging",
+          recommendation: `Homepage H1: ${q(homepage.evidence.headings.h1[0])}. Pricing H1: ${q(pricing.evidence.headings.h1[0])}. These feel like different products. Align the messaging so visitors feel continuity as they navigate.`,
+          whyItMatters: "Inconsistent messaging between pages breaks the visitor's mental model and reduces trust in the product story.",
+          evidence: { homepageH1: homepage.evidence.headings.h1[0], pricingH1: pricing.evidence.headings.h1[0], overlapWords: overlap },
+          howToTest: "Align pricing page heading with homepage value prop. Measure: pricing page bounce rate.",
+        });
+      }
+    }
+  }
+
+  // Homepage has CTA to signup but signup page is on a different domain.
+  if (homepage && signup) {
+    try {
+      const hpDomain = new URL(homepage.url).hostname;
+      const suDomain = new URL(signup.url).hostname;
+      if (hpDomain !== suDomain) {
+        findings.push({
+          id: "cross_domain_signup",
+          severity: "low",
+          title: `Signup is on a different domain (${suDomain}) from homepage (${hpDomain})`,
+          recommendation: `Your homepage is on ${hpDomain} but signup redirects to ${suDomain}. This domain switch can trigger trust concerns. Consider using a subdomain of your main domain or embedding signup on the main site.`,
+          whyItMatters: "Domain changes during signup make visitors wonder if they're on a legitimate site, especially if the design differs.",
+          evidence: { homepageDomain: hpDomain, signupDomain: suDomain },
+          howToTest: "Monitor drop-off at the domain transition point. Consider moving signup to a subdomain.",
+        });
+      }
+    } catch {
+      // URL parsing failure is non-fatal.
+    }
+  }
+
+  return findings.slice(0, 10);
 }

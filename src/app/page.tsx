@@ -5,12 +5,20 @@ export default function Home() {
     <div className="flex flex-1 flex-col bg-white dark:bg-black">
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
         <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">SaaS Growth Audit</div>
-        <Link
-          href="/audits/new"
-          className="inline-flex h-9 items-center justify-center rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900"
-        >
-          Run audit
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/audits"
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900"
+          >
+            Dashboard
+          </Link>
+          <Link
+            href="/audits/new"
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+          >
+            Run audit
+          </Link>
+        </div>
       </header>
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-16">

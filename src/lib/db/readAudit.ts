@@ -110,3 +110,26 @@ export async function listOnboardingSteps(auditRunId: string): Promise<Onboardin
   if (error) throw error;
   return (data as OnboardingStepRow[]) ?? [];
 }
+
+export async function listAuditRuns(limit = 50): Promise<AuditRunRow[]> {
+  const sb = supabaseAdmin();
+  const { data, error } = await sb
+    .from("audit_runs")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data as AuditRunRow[]) ?? [];
+}
+
+export async function listAuditRunsForUrl(normalizedUrl: string, limit = 5): Promise<AuditRunRow[]> {
+  const sb = supabaseAdmin();
+  const { data, error } = await sb
+    .from("audit_runs")
+    .select("*")
+    .eq("normalized_url", normalizedUrl)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data as AuditRunRow[]) ?? [];
+}
