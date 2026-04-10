@@ -147,8 +147,8 @@ export default async function AuditRunPage(props: { params: Promise<{ id: string
   const hasLlm = findings.some((f) => f.source === "llm");
 
   // Onboarding data.
-  const onboardingStatus = (run as Record<string, unknown>).onboarding_status as string | undefined ?? "pending";
-  const onboardingSummary = (run as Record<string, unknown>).onboarding_summary as Record<string, unknown> | null;
+  const onboardingStatus = run.onboarding_status ?? "pending";
+  const onboardingSummary = run.onboarding_summary as Record<string, unknown> | null;
   const onboardingDone = onboardingStatus === "done" || onboardingStatus === "blocked";
   const onboardingRunning = onboardingStatus === "running";
   const onboardingFailed = onboardingStatus === "failed";

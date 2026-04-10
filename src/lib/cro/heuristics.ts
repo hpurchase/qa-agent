@@ -262,9 +262,7 @@ export function runHeuristicCroChecks(e: EvidencePack): CroFinding[] {
   // --- CTA-TO-FORM MISMATCH (dynamic — detects when CTA says "free trial" but form asks for payment info) ---
   if (primaryCtas.length > 0 && e.forms.length > 0) {
     const ctaSaysFree = primaryCtas.some((c) => /free|trial|no.?credit/i.test(c.label));
-    const formHasPayment = e.forms.some((f) =>
-      f.labels.some((l) => /card|payment|billing|cvv|expir/i.test(l)),
-    );
+    const formHasPayment = e.forms.some((f) => f.hasPaymentFields);
     if (ctaSaysFree && formHasPayment) {
       const freeCta = primaryCtas.find((c) => /free|trial|no.?credit/i.test(c.label));
       const paymentLabels = e.forms.flatMap((f) => f.labels).filter((l) => /card|payment|billing|cvv|expir/i.test(l));

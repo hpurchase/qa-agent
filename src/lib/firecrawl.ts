@@ -64,11 +64,12 @@ async function withRetry<T>(
     } catch (err) {
       lastError = err;
       const isTimeout =
-        err instanceof DOMException && err.name === "AbortError";
+        (err instanceof Error && err.name === "AbortError") ||
+        (err instanceof DOMException && err.name === "AbortError");
       const isTransient =
         isTimeout ||
         (err instanceof Error &&
-          /ECONNRESET|ETIMEDOUT|socket hang up|network|fetch failed|502|503|429/i.test(
+          /ECONNRESET|ETIMEDOUT|socket hang up|network|fetch failed|502|503|429|abort/i.test(
             err.message,
           ));
       if (!isTransient || attempt === maxAttempts) break;

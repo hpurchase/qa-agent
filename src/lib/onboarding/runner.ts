@@ -704,8 +704,9 @@ export async function runOnboardingFlow(params: {
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : "Interact failed";
         const isTransient =
-          err instanceof DOMException && err.name === "AbortError" ||
-          (err instanceof Error && /timeout|ECONNRESET|socket hang up|network|502|503|429/i.test(err.message));
+          (err instanceof Error && err.name === "AbortError") ||
+          (err instanceof DOMException && err.name === "AbortError") ||
+          (err instanceof Error && /timeout|ECONNRESET|socket hang up|network|502|503|429|abort/i.test(err.message));
         // Only count non-transient errors toward the failure limit.
         if (!isTransient) consecutiveFailures++;
         steps.push({

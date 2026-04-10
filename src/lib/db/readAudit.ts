@@ -7,7 +7,7 @@ export type AuditRunRow = {
   site_summary: unknown | null;
   status: string;
   error: string | null;
-  onboarding_status: string;
+  onboarding_status: string | null;
   onboarding_summary: unknown | null;
   created_at: string;
   updated_at: string;
