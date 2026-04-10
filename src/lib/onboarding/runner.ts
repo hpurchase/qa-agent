@@ -24,8 +24,8 @@ export type RunResult = {
   blockedReason: string | null;
 };
 
-const MAX_STEPS = 10;
-const MAX_DURATION_MS = 3 * 60 * 1000;
+const MAX_STEPS = 20;
+const MAX_DURATION_MS = 5 * 60 * 1000;
 
 type ClaudeDecision = {
   action: OnboardingStepAction;
@@ -504,10 +504,10 @@ export async function runOnboardingFlow(params: {
         }
       }
 
-      // 6. Stuck loop detection.
+      // 6. Stuck loop detection — use fuzzy matching, not exact.
       const hash = domHash(pageInfo.html || "empty");
       recentHashes.push(hash);
-      if (recentHashes.length > 3) recentHashes.shift();
+      if (recentHashes.length > 4) recentHashes.shift();
 
       // 7. Ask Claude what to do next.
       const stepStart = Date.now();
@@ -524,33 +524,62 @@ export async function runOnboardingFlow(params: {
         reason: decision.reason,
       });
 
-      const actionKey = `${decision.action}|${decision.instruction}`.slice(0, 300);
+      // Normalize action key for comparison (lowercase, strip quotes/whitespace variance).
+      const normalizeKey = (a: string, i: string) =>
+        `${a}|${i}`.toLowerCase().replace(/["'`]/g, "").replace(/\s+/g, " ").trim().slice(0, 200);
+      const actionKey = normalizeKey(decision.action, decision.instruction);
       recentActionKeys.push(actionKey);
-      if (recentActionKeys.length > 3) recentActionKeys.shift();
+      if (recentActionKeys.length > 4) recentActionKeys.shift();
 
-      // If we appear to be stuck (same DOM + repeated action),
-      // ask Claude to "step back" and choose a different unblocker action.
-      if (
-        recentHashes.length >= 3 &&
-        recentHashes.every((h) => h === recentHashes[0]) &&
+      // Detect stuck: page barely changed AND action is semantically repeated.
+      // "Barely changed" = majority of recent hashes are the same (allows minor DOM flicker).
+      const uniqueHashes = new Set(recentHashes);
+      const pageStuck = recentHashes.length >= 3 && uniqueHashes.size <= 2;
+      // "Action repeated" = last 2 normalized action keys match.
+      const actionRepeated =
         recentActionKeys.length >= 2 &&
-        recentActionKeys[recentActionKeys.length - 1] === recentActionKeys[recentActionKeys.length - 2] &&
-        recoveryAttempts < 2
-      ) {
-        recoveryAttempts++;
-        const recovery = await askClaudeRecovery({
-          persona: params.persona,
-          screenshotBytes,
-          simplifiedDom: simplifiedJson,
-          previousSteps: previousActions,
-          stuckReason: "Same page content and repeated action without progress",
-        });
-        decision = recovery;
-        previousActions.push({
-          action: decision.action,
-          instruction: decision.instruction,
-          reason: `RECOVERY: ${decision.reason}`,
-        });
+        recentActionKeys[recentActionKeys.length - 1] === recentActionKeys[recentActionKeys.length - 2];
+      // Also detect if we've been on the same URL for 4+ steps with no progress.
+      const urlStuck =
+        recentHashes.length >= 4 &&
+        previousActions.length >= 4 &&
+        previousActions.slice(-4).every((a) => a.action === "fill" || a.action === "click") &&
+        uniqueHashes.size <= 2;
+
+      if ((pageStuck && actionRepeated) || urlStuck) {
+        if (recoveryAttempts < 3) {
+          recoveryAttempts++;
+          const stuckReason = urlStuck
+            ? `Page URL unchanged for ${recentHashes.length} steps with no visible progress`
+            : "Same page content and repeated action without progress";
+          const recovery = await askClaudeRecovery({
+            persona: params.persona,
+            screenshotBytes,
+            simplifiedDom: simplifiedJson,
+            previousSteps: previousActions,
+            stuckReason,
+          });
+          decision = recovery;
+          previousActions.push({
+            action: decision.action,
+            instruction: decision.instruction,
+            reason: `RECOVERY: ${decision.reason}`,
+          });
+        } else {
+          // Exhausted recovery attempts — declare stuck.
+          steps.push({
+            stepIdx: step,
+            url: pageInfo.url,
+            actionType: "blocked",
+            actionDetail: { reason: "Stuck after 3 recovery attempts" },
+            durationMs: Date.now() - stepStart,
+            screenshotBytes,
+            blockedReason: "Stuck in loop after 3 recovery attempts",
+          });
+          finalStatus = "stuck";
+          blockedReason = "Stuck in loop after 3 recovery attempts";
+          break;
+        }
       }
 
       // --- Terminal actions ---
@@ -661,8 +690,12 @@ export async function runOnboardingFlow(params: {
           blockedReason: null,
         });
       } catch (err) {
-        consecutiveFailures++;
         const errMsg = err instanceof Error ? err.message : "Interact failed";
+        const isTransient =
+          err instanceof DOMException && err.name === "AbortError" ||
+          (err instanceof Error && /timeout|ECONNRESET|socket hang up|network|502|503|429/i.test(err.message));
+        // Only count non-transient errors toward the failure limit.
+        if (!isTransient) consecutiveFailures++;
         steps.push({
           stepIdx: step,
           url: pageInfo.url,
@@ -672,9 +705,9 @@ export async function runOnboardingFlow(params: {
           screenshotBytes,
           blockedReason: null,
         });
-        if (consecutiveFailures >= 3) {
+        if (consecutiveFailures >= 4) {
           finalStatus = "error";
-          blockedReason = `3 consecutive action failures. Last: ${errMsg}`;
+          blockedReason = `${consecutiveFailures} consecutive action failures. Last: ${errMsg}`;
           break;
         }
         continue;

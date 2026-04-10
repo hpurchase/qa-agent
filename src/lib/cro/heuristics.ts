@@ -158,117 +158,91 @@ export function runHeuristicCroChecks(e: EvidencePack): CroFinding[] {
     });
   }
 
-  // --- MISSING OR MULTIPLE H1 (SEO + messaging clarity) ---
-  if (e.headings.h1.length === 0) {
-    findings.push({
-      id: "missing_h1",
-      severity: "high",
-      title: "No H1 heading found on the page",
-      recommendation: "Every landing page needs exactly one H1 that clearly states the product's value proposition. Add an H1 to the hero section that answers 'What does this product do for me?'",
-      whyItMatters: "The H1 is the first thing both visitors and search engines read. Without one, visitors lack a clear anchor for what your product does.",
-      evidence: { h1Count: 0, h2Count: e.headings.h2.length },
-      howToTest: "Add a clear, benefit-oriented H1. Measure: bounce rate and time on page.",
-    });
-  } else if (e.headings.h1.length > 1) {
-    findings.push({
-      id: "multiple_h1",
-      severity: "low",
-      title: `${e.headings.h1.length} H1 headings found — should be exactly 1`,
-      recommendation: `Found ${e.headings.h1.length} H1s: ${e.headings.h1.slice(0, 3).map(q).join(", ")}. Use one H1 for the main value prop, change the rest to H2s.`,
-      whyItMatters: "Multiple H1s dilute both the page's message hierarchy and SEO signal.",
-      evidence: { h1s: e.headings.h1.slice(0, 5) },
-      howToTest: "Reduce to one H1. Measure: organic traffic changes after 2 weeks.",
-    });
-  }
-
-  // --- WEAK VALUE PROP (H1 too long or too vague) ---
+  // --- VALUE PROP CLARITY (dynamic — only fires when we can say something specific) ---
   if (e.headings.h1.length === 1) {
     const h1 = e.headings.h1[0];
     const wordCount = h1.split(/\s+/).length;
-    if (wordCount > 15) {
+    // Detect feature-dump H1s ("AI-powered collaboration platform for remote teams that helps you...")
+    const hasBuzzwords = /\b(ai[- ]powered|next[- ]gen|revolutionary|cutting[- ]edge|world[- ]class|enterprise[- ]grade)\b/i.test(h1);
+    const benefitWords = /\b(save|reduce|grow|increase|boost|simplify|automate|faster|easier|cheaper)\b/i;
+    const hasBenefit = benefitWords.test(h1);
+
+    if (wordCount > 12 && !hasBenefit) {
       findings.push({
-        id: "h1_too_long",
+        id: "h1_no_benefit",
         severity: "med",
-        title: `H1 is ${wordCount} words long — too wordy to scan`,
-        recommendation: `Your H1 is: ${q(h1)}. Shorten it to under 10 words. A good H1 communicates the core benefit in the time it takes to glance at the page (~3 seconds).`,
-        whyItMatters: "Visitors decide within 5 seconds if a page is relevant. A long H1 doesn't get read — it gets skipped.",
-        evidence: { h1, wordCount },
-        howToTest: "A/B test: current H1 vs a shorter, benefit-focused version. Measure: scroll depth and CTA clicks.",
+        title: `H1 describes the product but not the benefit: ${q(h1.length > 70 ? h1.slice(0, 67) + "…" : h1)}`,
+        recommendation: `Your H1 is ${wordCount} words: ${q(h1)}. It describes what the product IS, not what it DOES for the visitor. Rewrite to lead with the outcome: "Reduce [pain] by X%" or "Get [benefit] in minutes."`,
+        whyItMatters: "Visitors care about outcomes, not capabilities. Feature-first H1s require mental work to translate into 'why should I care?'",
+        evidence: { h1, wordCount, hasBenefit: false },
+        howToTest: "A/B test: current H1 vs outcome-first version. Measure: scroll depth past hero and CTA clicks.",
       });
-    } else if (wordCount <= 2 && !/\w/.test(h1)) {
+    } else if (hasBuzzwords && wordCount > 6) {
+      const buzzFound = h1.match(/\b(ai[- ]powered|next[- ]gen|revolutionary|cutting[- ]edge|world[- ]class|enterprise[- ]grade)\b/gi) ?? [];
       findings.push({
-        id: "h1_too_short",
-        severity: "med",
-        title: "H1 is too short to communicate value",
-        recommendation: `Your H1 is: ${q(h1)}. This doesn't tell visitors what your product does or why they should care. Write an H1 that includes the benefit and the target audience.`,
-        whyItMatters: "A vague or brand-only H1 forces visitors to hunt for what the product actually does, increasing bounce.",
-        evidence: { h1, wordCount },
-        howToTest: "Replace with a benefit-oriented H1. Measure: bounce rate and scroll depth.",
+        id: "h1_buzzword_heavy",
+        severity: "low",
+        title: `H1 relies on buzzwords (${buzzFound.map(q).join(", ")}) instead of specifics`,
+        recommendation: `Your H1 ${q(h1)} uses ${buzzFound.map(q).join(", ")}. Replace buzzwords with concrete specifics: what exactly does it do, for whom, and what result? E.g., "Deploy ML models in 5 minutes" beats "AI-powered deployment platform."`,
+        whyItMatters: "Everyone says 'AI-powered' — it means nothing to visitors. Specificity builds credibility and differentiates.",
+        evidence: { h1, buzzwords: buzzFound },
+        howToTest: "Replace buzzwords with specifics. Measure: bounce rate and signup rate from homepage.",
       });
     }
   }
 
-  // --- NO ABOVE-THE-FOLD CTA ---
-  if (isLive && !isPreLaunch) {
+  // --- CTA PLACEMENT (dynamic — only when we can map the specific CTAs) ---
+  if (isLive && !isPreLaunch && primaryCtas.length > 0) {
     const heroCtas = realCtas.filter((c) => c.locationHint === "hero" || c.locationHint === "nav");
     const primaryInHero = heroCtas.filter((c) => PRIMARY_CTA.test(c.label));
-    if (primaryInHero.length === 0 && primaryCtas.length > 0) {
+    const bodyCtas = primaryCtas.filter((c) => c.locationHint === "body");
+    const footerCtas = primaryCtas.filter((c) => c.locationHint === "footer");
+
+    if (primaryInHero.length === 0 && bodyCtas.length > 0) {
+      // CTA exists but only in the body — specific about where it is
+      const bodyLabels = uniqByLower(bodyCtas.map((c) => c.label));
       findings.push({
-        id: "no_hero_cta",
+        id: "cta_below_fold",
         severity: "high",
-        title: "Primary signup CTA is not in the hero section or navigation",
-        recommendation: `Found ${primaryCtas.length} signup CTA(s) but none in the hero or nav area. The primary CTA (${q(primaryCtas[0].label)}) should be visible without scrolling — place it in the hero section and/or sticky nav.`,
-        whyItMatters: "If visitors have to scroll to find the signup button, 30-50% will leave before seeing it. Above-the-fold CTAs convert 2-3x better.",
-        evidence: { primaryCtaLocations: primaryCtas.slice(0, 5).map((c) => ({ label: c.label, location: c.locationHint })) },
-        howToTest: "Move the primary CTA into the hero section. Measure: CTA visibility (scroll depth) and click-through rate.",
+        title: `Signup CTA (${bodyLabels.slice(0, 2).map(q).join(", ")}) only appears in the page body, not above the fold`,
+        recommendation: `Found ${primaryCtas.length} signup CTA(s) but they're all in the body: ${bodyLabels.map(q).join(", ")}. Duplicate your primary CTA into the hero section. Keep the body CTAs too — visitors who scroll past need another chance.`,
+        whyItMatters: "50%+ of visitors never scroll past the first viewport. A CTA only in the body section is invisible to most visitors.",
+        evidence: { bodyCtaLabels: bodyLabels, heroCtaCount: primaryInHero.length, totalPrimaryCount: primaryCtas.length },
+        howToTest: "Add hero CTA. Measure: total CTA clicks (hero + body) and signup conversion.",
+      });
+    } else if (primaryInHero.length === 0 && footerCtas.length > 0 && bodyCtas.length === 0) {
+      // CTA only in footer — even worse
+      findings.push({
+        id: "cta_only_footer",
+        severity: "high",
+        title: `Signup CTA only appears in the footer — most visitors will never see it`,
+        recommendation: `The only signup CTA (${q(footerCtas[0].label)}) is in the footer. Move it to the hero section and add repeating CTAs after key content sections (features, testimonials, pricing).`,
+        whyItMatters: "Footer CTAs convert 5-10x worse than hero CTAs because only 10-20% of visitors reach the footer.",
+        evidence: { footerCtaLabel: footerCtas[0].label, heroCtaCount: 0, bodyCtaCount: 0 },
+        howToTest: "Add hero CTA + mid-page CTA. Measure: total signup conversion.",
       });
     }
   }
 
-  // --- MISSING META DESCRIPTION (SEO) ---
-  if (!e.metaDescription) {
-    findings.push({
-      id: "missing_meta_description",
-      severity: "low",
-      title: "No meta description found",
-      recommendation: "Add a meta description (150-160 characters) that summarizes what your product does and includes a call-to-action. This appears in Google search results and affects click-through rate.",
-      whyItMatters: "Pages without a meta description let Google auto-generate one from page content, which is often incoherent and hurts CTR from search.",
-      evidence: { metaDescription: null, title: e.title },
-      howToTest: "Add a meta description. Monitor: Google Search Console CTR for branded queries.",
-    });
-  }
-
-  // --- NO FREE TRIAL REASSURANCE ---
+  // --- REASSURANCE GAP (dynamic — adapts to what type of signup the site has) ---
   if (isLive && !isPreLaunch && primaryCtas.length > 0) {
     const hasReassurance = e.plg.mentionsNoCreditCard || e.plg.mentionsFreeForever || e.plg.mentionsCancelAnytime;
-    if (!hasReassurance) {
+    if (!hasReassurance && e.forms.some((f) => f.hasPassword)) {
+      // Site has a signup form with a password field but no reassurance — high confidence this matters
+      const formLabels = e.forms.filter((f) => f.hasPassword).flatMap((f) => f.labels);
       findings.push({
-        id: "no_reassurance",
+        id: "no_reassurance_with_form",
         severity: "med",
-        title: "No reassurance copy found near signup CTAs",
-        recommendation: `Your page has signup CTAs but doesn't mention "no credit card required", "free forever", or "cancel anytime". Add reassurance text directly below or next to the primary CTA.`,
-        whyItMatters: "Reassurance copy addresses the #1 signup objection ('will I be charged?'). Adding it typically lifts form starts by 10-30%.",
-        evidence: { mentionsNoCreditCard: false, mentionsFreeForever: false, mentionsCancelAnytime: false },
-        howToTest: "Add 'No credit card required' below your hero CTA. Measure: CTA click-through rate.",
+        title: `Signup form asks for a password but page has no "free" or "no credit card" messaging`,
+        recommendation: `The signup form (fields: ${formLabels.slice(0, 4).map(q).join(", ") || "email + password"}) asks for commitment (password = account creation) but there's no reassurance that it's free or risk-free. Add "No credit card required" or "Free plan available" directly above or below the form.`,
+        whyItMatters: "A password field signals 'creating an account' which triggers loss aversion. Reassurance text reduces that friction by 10-30%.",
+        evidence: { hasPassword: true, formLabels: formLabels.slice(0, 6), mentionsNoCreditCard: false, mentionsFreeForever: false },
+        howToTest: "Add 'No credit card required' below the form submit button. Measure: form start rate and completion rate.",
       });
     }
   }
 
-  // --- TOO MANY NAV ITEMS (cognitive overload) ---
-  const meaningfulNav = e.navLabels.filter((l) => l.length > 1 && l.length < 30);
-  if (meaningfulNav.length > 8) {
-    findings.push({
-      id: "nav_overload",
-      severity: "low",
-      title: `${meaningfulNav.length} navigation items — consider simplifying`,
-      recommendation: `Found ${meaningfulNav.length} nav items: ${meaningfulNav.slice(0, 8).map(q).join(", ")}${meaningfulNav.length > 8 ? "…" : ""}. Best-practice SaaS navs have 5-7 items. Group secondary items under a dropdown or move to the footer.`,
-      whyItMatters: "Too many nav choices create decision paralysis. Hick's Law: decision time increases logarithmically with the number of options.",
-      evidence: { navCount: meaningfulNav.length, labels: meaningfulNav.slice(0, 15) },
-      howToTest: "Reduce nav to 5-7 core items. Measure: nav click distribution and homepage-to-signup conversion.",
-    });
-  }
-
-  // --- MIXED CONVERSION MOTIONS (confusing — both trial AND demo, no clear primary) ---
+  // --- MIXED CONVERSION MOTIONS (dynamic — specific about which CTAs conflict) ---
   if (!isPreLaunch && primaryCtas.length > 0 && salesCtas.length > 0) {
     const primaryInHero = primaryCtas.filter((c) => c.locationHint === "hero");
     const salesInHero = salesCtas.filter((c) => c.locationHint === "hero");
@@ -276,11 +250,32 @@ export function runHeuristicCroChecks(e: EvidencePack): CroFinding[] {
       findings.push({
         id: "mixed_motions_hero",
         severity: "med",
-        title: "Hero section has both self-serve and sales CTAs competing",
-        recommendation: `The hero area has both ${q(primaryInHero[0].label)} and ${q(salesInHero[0].label)}. Pick a primary motion and make the secondary one visually subordinate (e.g., text link vs button).`,
-        whyItMatters: "Two equal-weight CTAs in the hero split attention and reduce overall click-through. Users freeze when asked to choose.",
+        title: `Hero has competing CTAs: ${q(primaryInHero[0].label)} vs ${q(salesInHero[0].label)}`,
+        recommendation: `The hero area has both ${q(primaryInHero[0].label)} (self-serve) and ${q(salesInHero[0].label)} (sales). Pick your primary motion based on your ICP: if most customers are <50 employees, lead with the trial. Make the secondary one a text link, not a button.`,
+        whyItMatters: "Two equal-weight CTAs in the hero split attention. Visitors who can't decide which to click often click neither.",
         evidence: { heroPrimary: primaryInHero.map((c) => c.label), heroSales: salesInHero.map((c) => c.label) },
-        howToTest: "Make one CTA primary (filled button) and the other secondary (text link). Measure: total hero CTA clicks.",
+        howToTest: "Make one CTA visually primary (filled button) and the other secondary (outlined or text link). Measure: total hero CTA clicks.",
+      });
+    }
+  }
+
+  // --- CTA-TO-FORM MISMATCH (dynamic — detects when CTA says "free trial" but form asks for payment info) ---
+  if (primaryCtas.length > 0 && e.forms.length > 0) {
+    const ctaSaysFree = primaryCtas.some((c) => /free|trial|no.?credit/i.test(c.label));
+    const formHasPayment = e.forms.some((f) =>
+      f.labels.some((l) => /card|payment|billing|cvv|expir/i.test(l)),
+    );
+    if (ctaSaysFree && formHasPayment) {
+      const freeCta = primaryCtas.find((c) => /free|trial|no.?credit/i.test(c.label));
+      const paymentLabels = e.forms.flatMap((f) => f.labels).filter((l) => /card|payment|billing|cvv|expir/i.test(l));
+      findings.push({
+        id: "cta_form_mismatch",
+        severity: "high",
+        title: `CTA says ${q(freeCta?.label ?? "free trial")} but the form asks for payment info (${paymentLabels.slice(0, 2).map(q).join(", ")})`,
+        recommendation: `Your CTA promises ${q(freeCta?.label ?? "free")} but the signup form includes payment fields: ${paymentLabels.map(q).join(", ")}. This breaks trust. Either remove payment fields from initial signup or change the CTA to be honest about what's required.`,
+        whyItMatters: "Bait-and-switch from 'free' to 'enter payment' is the #1 cause of signup abandonment. 60-80% of users drop off at this point.",
+        evidence: { ctaLabel: freeCta?.label, paymentFields: paymentLabels },
+        howToTest: "Remove payment from initial signup (charge later). Measure: signup completion rate.",
       });
     }
   }

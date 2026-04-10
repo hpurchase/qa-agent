@@ -1,4 +1,4 @@
-import { downloadBytes, firecrawlScrape } from "@/lib/firecrawl";
+import { downloadBytes, firecrawlScrape, probeUrlExists } from "@/lib/firecrawl";
 import sharp from "sharp";
 import { insertArtifact, insertFinding, updateAuditRun } from "@/lib/db/auditRuns";
 import {
@@ -39,26 +39,7 @@ function extFor(mt: string) {
   return "jpg";
 }
 
-async function preflightUrlExists(url: string): Promise<boolean> {
-  // Prevent wasting Firecrawl credits on URLs that 404 / are blocked.
-  // Redirects are considered "exists" (very common for auth/signup flows).
-  try {
-    const head = await fetch(url, { method: "HEAD", redirect: "manual" });
-    if (head.status > 0 && head.status < 400) return true;
-    if (head.status === 405 || head.status === 403 || head.status === 0) {
-      const get = await fetch(url, { method: "GET", redirect: "manual" });
-      return get.status > 0 && get.status < 400;
-    }
-    return false;
-  } catch {
-    try {
-      const get = await fetch(url, { method: "GET", redirect: "manual" });
-      return get.status > 0 && get.status < 400;
-    } catch {
-      return false;
-    }
-  }
-}
+// Use shared probeUrlExists from firecrawl.ts (has timeout + fallback).
 
 async function resizeForVision(bytes: ArrayBuffer): Promise<{ bytes: ArrayBuffer; mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" }> {
   const img = sharp(Buffer.from(bytes));
@@ -164,7 +145,7 @@ async function captureTarget(params: {
   const hasCapture = Boolean(existingHtml && existingDesktopPath && existingMobilePath);
 
   if (!hasCapture) {
-    const ok = await preflightUrlExists(params.url);
+    const ok = await probeUrlExists(params.url);
     if (!ok) {
       throw new Error(`Preflight failed: URL not reachable (status >= 400) ${params.url}`);
     }

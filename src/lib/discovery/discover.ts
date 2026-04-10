@@ -5,7 +5,7 @@ import {
   pickBestCandidate,
   type DiscoveredCandidate,
 } from "@/lib/discovery/candidates";
-import { firecrawlMap, firecrawlInteractCode, firecrawlInteractStop } from "@/lib/firecrawl";
+import { firecrawlMap, firecrawlInteractCode, firecrawlInteractStop, probeUrlExists } from "@/lib/firecrawl";
 
 export type DiscoveryResult = {
   pricing: DiscoveredCandidate | null;
@@ -14,28 +14,6 @@ export type DiscoveryResult = {
 };
 
 const SIGNUP_PROBE_PATHS = ["/signup", "/sign-up", "/register", "/login", "/start"];
-
-async function probeUrl(url: string): Promise<boolean> {
-  // Some apps reject HEAD (405) or redirect (302) before landing on HTML.
-  // We treat any <400 response as "exists" and prefer GET as a fallback.
-  try {
-    const head = await fetch(url, { method: "HEAD", redirect: "manual" });
-    if (head.status > 0 && head.status < 400) return true;
-    // If HEAD isn't allowed (or otherwise inconclusive), try a lightweight GET.
-    if (head.status === 405 || head.status === 403 || head.status === 0) {
-      const get = await fetch(url, { method: "GET", redirect: "manual" });
-      return get.status > 0 && get.status < 400;
-    }
-    return false;
-  } catch {
-    try {
-      const get = await fetch(url, { method: "GET", redirect: "manual" });
-      return get.status > 0 && get.status < 400;
-    } catch {
-      return false;
-    }
-  }
-}
 
 function rootDomain(hostname: string): string {
   const parts = hostname.split(".");
@@ -50,13 +28,13 @@ async function probeSubdomainSignup(baseUrl: string): Promise<DiscoveredCandidat
   for (const subdomain of subdomains) {
     for (const path of SIGNUP_PROBE_PATHS) {
       const candidate = `https://${subdomain}${path}`;
-      if (await probeUrl(candidate)) {
+      if (await probeUrlExists(candidate)) {
         return { url: candidate, role: "signup", confidence: "medium", source: "href_pattern" };
       }
     }
     // Also try the bare subdomain root.
     const bare = `https://${subdomain}`;
-    if (await probeUrl(bare)) {
+    if (await probeUrlExists(bare)) {
       return { url: bare, role: "signup", confidence: "low", source: "href_pattern" };
     }
   }
@@ -64,7 +42,7 @@ async function probeSubdomainSignup(baseUrl: string): Promise<DiscoveredCandidat
   // Also probe same-domain signup paths.
   for (const path of SIGNUP_PROBE_PATHS) {
     const candidate = `${base.origin}${path}`;
-    if (await probeUrl(candidate)) {
+    if (await probeUrlExists(candidate)) {
       return { url: candidate, role: "signup", confidence: "medium", source: "href_pattern" };
     }
   }
